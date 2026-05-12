@@ -1,0 +1,48 @@
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.sublime-project
+.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+.directory
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Node modules (for any root-level node projects)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+build/
+
+# Test coverage
+coverage/
+
+# Miscellaneous
+*.log
+.history
+.cache
+temp/
+tmp/
+
+# Flutter
+.packages
+.dart_tool/
+build/
+
+# Documentation
+docs/local/
