@@ -57,6 +57,18 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
+## API Examples
+
+```bash
+# Create item
+curl -X POST http://localhost:3000/items \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Item A"}'
+
+# Update item timestamp (refresh ts)
+curl -X PATCH http://localhost:3000/items/<ITEM_ID>/ts
+```
+
 ## Deployment
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.

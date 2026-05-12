@@ -31,7 +31,7 @@ The app uses this document shape in `items`:
 {
   "_id": "ObjectId",
   "name": "sensor-A",
-  "ts": "2026-05-11T09:30:00.000Z",
+  "ts": "6820e4f3b7c2a1d3e5f60789",
   "createdAt": "2026-05-11T09:30:00.000Z",
   "updatedAt": "2026-05-11T09:30:00.000Z"
 }
@@ -111,7 +111,8 @@ Socket event: `ts_changed`
 ```json
 {
   "id": "6820e4f3b7...",
-  "ts": "2026-05-11T08:30:15.123Z"
+  "ts": { "$oid": "6820e4f9a3b1c2d4e5f60790" },
+  "source": "12345-550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 

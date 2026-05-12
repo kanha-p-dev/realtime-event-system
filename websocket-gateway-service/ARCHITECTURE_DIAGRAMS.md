@@ -58,36 +58,31 @@ sequenceDiagram
 flowchart TD
     A["🔌 WebSocket Gateway<br/>(NestJS + Socket.IO)<br/>PORT 3001"] --> B["🚀 Startup Service"]
     
-    B --> C["📡 Connect to MongoDB<br/>Change Stream"]
-    C --> D{"Connection<br/>สำเร็จ?"}
-    
-    D -->|ไม่| E["❌ Connection Failed<br/>Retry in 5s"]
-    E --> C
-    
-    D -->|ใช่| F["👂 Listening to Changes<br/>รอการเปลี่ยนแปลง"]
+    B --> C["📡 Watch MongoDB Change Stream<br/>collection.watch([], {fullDocument: 'updateLookup'})"]
+    C --> D["🔐 Try Acquire Broadcast Leadership<br/>ผ่าน distributed lock ใน MongoDB"]
+    D --> E["⏰ Start Lock Renew Loop<br/>ทุก 5 วินาที"]
+    E --> F["👂 Listening to Changes<br/>insert / update / replace / delete"]
     
     F --> G["🎯 Accept Client Connections<br/>Socket.IO Server"]
     
     G --> H{"เกิดเหตุการณ์<br/>ใด?"}
     
-    H -->|Client Connect| I["✅ Client Connected<br/>Store Client Reference"]
-    I --> J["📝 Log Connection<br/>Track Active Clients"]
-    J --> G
+    H -->|Client Connect| I["✅ Client Connected<br/>Log clientId"]
+    I --> G
     
-    H -->|Client Disconnect| K["❌ Client Disconnected<br/>Remove Client Reference"]
-    K --> J
+    H -->|Client Disconnect| K["❌ Client Disconnected<br/>Log clientId"]
     K --> G
     
-    H -->|Database Change<br/>INSERT| L["🆕 New Document<br/>Inserted"]
-    H -->|Database Change<br/>UPDATE| M["📝 Document<br/>Updated"]
-    H -->|Database Change<br/>DELETE| N["🗑️ Document<br/>Deleted"]
+    H -->|Database Change<br/>insert/update/replace/delete| L["⚙️ Extract id และ ts<br/>จาก documentKey / fullDocument"]
     
-    L --> O["⚙️ Process Change Event<br/>Extract Change Data"]
-    M --> O
-    N --> O
+    L --> M["📦 enqueueChange(id, ts)<br/>Coalesce ด้วย Map"]
+    M --> N["⏱️ Debounce 50ms<br/>setTimeout flushPendingChanges"]
+    N --> O{"เป็น<br/>Broadcast Leader?"}
     
-    O --> P["📦 Create Payload<br/>พร้อมข้อมูลการเปลี่ยนแปลง"]
-    P --> Q["🔄 Emit ts_changed Event<br/>ออกอากาศไปยัง Clients"]
+    O -->|ไม่ใช่| P["🚫 Skip Flush<br/>Clear pendingChanges"]
+    O -->|ใช่| Q["🔄 Emit ts_changed<br/>{ id, ts: { \$oid }, source } ทุก entry"]
+    
+    Q --> R["📢 Broadcast to<br/>All Connected Clients"]
     
     Q --> R{"มี Connected<br/>Clients?"}
     R -->|ไม่| S["⚠️ No Active Clients<br/>Log Warning"]
@@ -101,26 +96,25 @@ flowchart TD
 
 **คำอธิบาย - Change Detection & Broadcasting:**
 
-1. **Startup & Connection**
+1. **Startup**
    - เริ่มต้น WebSocket Gateway Service
-   - เชื่อมต่อกับ MongoDB Change Stream
-   - หากเชื่อมต่อล้มเหลว ให้ลองใหม่ทุก 5 วินาที
+   - Watch MongoDB Change Stream บน collection `items` (fullDocument: updateLookup)
+   - ลอง Acquire Broadcast Leadership ผ่าน distributed lock ใน MongoDB
+   - เริ่ม loop ต่ออายุ lock ทุก 5 วินาที
 
 2. **Listen to Changes**
-   - รอการเปลี่ยนแปลงข้อมูล (Insert/Update/Delete) จาก MongoDB
-   - พร้อมสำหรับการรับการเชื่อมต่อจาก Clients
+   - รับ operation types: insert, update, replace, delete
+   - Extract `id` จาก `documentKey._id` และ `ts` จาก `fullDocument.ts` (หรือ fallback เป็น id)
 
-3. **Client Connection Management**
-   - เมื่อ Client เชื่อมต่อ → บันทึกข้อมูล Reference
-   - เมื่อ Client ตัดการเชื่อมต่อ → ลบข้อมูล Reference
+3. **Debounce & Coalescing**
+   - enqueue change เข้า `Map<id, ts>` (ถ้า id เดิมมาซ้ำ จะ overwrite ด้วย ts ล่าสุด)
+   - flush หลัง debounce 50ms
 
-4. **Change Event Processing**
-   - ประมวลผล Change Event (Extract ข้อมูลที่เปลี่ยนแปลง)
-   - สร้าง Payload พร้อมข้อมูลการเปลี่ยนแปลง
+4. **Broadcast Leadership**
+   - เฉพาะ instance ที่เป็น leader เท่านั้นที่ broadcast ได้ (ป้องกัน duplicate กรณีหลาย instance)
 
 5. **Broadcasting**
-   - Emit `ts_changed` Event ไปยังทุก Connected Clients
-   - บันทึก Metrics/Logging สำหรับ Monitoring
+   - Emit `ts_changed { id, ts: { $oid }, source }` ไปยังทุก Connected Clients ด้วย `server.emit()`
 
 ---
 
@@ -128,15 +122,11 @@ flowchart TD
 
 ### Supported Socket.IO Events
 
-| Event | Direction | ความสำคัญ | คำอธิบาย |
-|-------|-----------|-----------|----------|
-| `connect` | Client → Server | ⭐⭐⭐ | Client เชื่อมต่อ |
-| `disconnect` | Client → Server | ⭐⭐⭐ | Client ตัดการเชื่อมต่อ |
-| `ts_changed` | Server → Client | ⭐⭐⭐ | ข้อมูลมีการเปลี่ยนแปลง |
-| `subscribe` | Client → Server | ⭐⭐ | Subscribe ไปยัง Event |
-| `unsubscribe` | Client → Server | ⭐⭐ | Unsubscribe จาก Event |
-| `ping` | Client → Server | ⭐ | Heartbeat/Keep-alive |
-| `pong` | Server → Client | ⭐ | Response to ping |
+| Event | Direction | คำอธิบาย |
+|-------|-----------|----------|
+| `connect` | Client → Server | Client เชื่อมต่อ (Socket.IO built-in) |
+| `disconnect` | Client → Server | Client ตัดการเชื่อมต่อ (Socket.IO built-in) |
+| `ts_changed` | Server → Client | Gateway broadcast เมื่อข้อมูลใน MongoDB เปลี่ยนแปลง |
 
 ---
 
@@ -144,52 +134,21 @@ flowchart TD
 
 ### ts_changed Event Payload
 
-**When INSERT:**
+ทุก operation type (insert/update/replace/delete) ใช้ payload รูปแบบเดียวกัน:
+
 ```json
 {
-  "type": "INSERT",
-  "operationType": "insert",
-  "timestamp": "2026-05-12T10:30:00.000Z",
-  "fullDocument": {
-    "_id": "507f1f77bcf86cd799439011",
-    "name": "sensor-A",
-    "description": "Temperature sensor",
-    "createdAt": "2026-05-12T10:30:00.000Z",
-    "updatedAt": "2026-05-12T10:30:00.000Z"
-  }
+  "id": "507f1f77bcf86cd799439011",
+  "ts": { "$oid": "6820e4f9a3b1c2d4e5f60790" },
+  "source": "12345-550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
-**When UPDATE:**
-```json
-{
-  "type": "UPDATE",
-  "operationType": "update",
-  "timestamp": "2026-05-12T10:45:00.000Z",
-  "documentKey": {
-    "_id": "507f1f77bcf86cd799439011"
-  },
-  "updateDescription": {
-    "updatedFields": {
-      "name": "sensor-A-updated",
-      "updatedAt": "2026-05-12T10:45:00.000Z"
-    },
-    "removedFields": []
-  }
-}
-```
-
-**When DELETE:**
-```json
-{
-  "type": "DELETE",
-  "operationType": "delete",
-  "timestamp": "2026-05-12T10:50:00.000Z",
-  "documentKey": {
-    "_id": "507f1f77bcf86cd799439011"
-  }
-}
-```
+| Field | Type | คำอธิบาย |
+|-------|------|----------|
+| `id` | string (24-char hex) | `_id` ของ item ที่เปลี่ยนแปลง |
+| `ts` | `{ $oid: string }` | ObjectId ของ ts ล่าสุด |
+| `source` | string | `{pid}-{uuid}` ของ gateway instance ที่ broadcast |
 
 ---
 
@@ -210,8 +169,6 @@ npm install
 ```env
 PORT=3001
 MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.xxxx.mongodb.net/realtime_event_system?retryWrites=true&w=majority
-NODE_ENV=development
-LOG_LEVEL=debug
 ```
 
 ### Running
@@ -254,15 +211,11 @@ npm run start:prod
 websocket-gateway-service/
 ├── src/
 │   ├── app.module.ts           # Main module
-│   ├── main.ts                 # Entry point
-│   ├── realtime/
-│   │   ├── realtime.gateway.ts # Socket.IO gateway
-│   │   ├── realtime.service.ts # Change Stream logic
-│   │   ├── realtime.module.ts  # Realtime module
-│   │   └── dto/                # Data Transfer Objects
-│   └── common/
-│       ├── config/             # Configuration
-│       └── logger/             # Logging utilities
+│   ├── main.ts                 # Entry point (PORT 3001)
+│   └── realtime/
+│       ├── realtime.gateway.ts # Socket.IO gateway (handleConnection/Disconnect, broadcastTsChanged)
+│       ├── change-stream.service.ts # MongoDB Change Stream + debounce + broadcast leadership
+│       └── realtime.module.ts  # Realtime module
 ├── test/                       # E2E tests
 ├── package.json
 ├── tsconfig.json
@@ -287,8 +240,8 @@ websocket-gateway-service/
 - Reconnection attempts: auto with exponential backoff
 
 ✅ **High Availability**
-- Multiple Gateway instances สามารถทำได้โดยใช้ Redis adapter
-- Redis เพื่อ shared event broadcasting
+- รองรับหลาย Gateway instances พร้อมกันโดยใช้ distributed lock ใน MongoDB (`realtime_broadcast_locks`)
+- เฉพาะ instance ที่เป็น leader (lock holder) เท่านั้นที่ broadcast ป้องกัน duplicate events
 
 ---
 

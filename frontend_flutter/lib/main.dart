@@ -195,6 +195,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
     }
 
     try {
+      _setInlineError('');
       final Uri uri = Uri.parse('$apiBaseUrl/items');
       final http.Response response = await http
           .post(
@@ -204,12 +205,15 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
           )
           .timeout(apiTimeout);
 
-      if (response.statusCode != 201) {
+      if (response.statusCode != 201 && response.statusCode != 200) {
         throw Exception('สร้างรายการไม่สำเร็จ (สถานะ: ${response.statusCode})');
       }
 
       _nameController.clear();
-      await _fetchItems();
+      _notifyUser(
+        'สร้างสำเร็จแล้ว กำลังรอ real-time event...',
+        showSnackBar: false,
+      );
     } catch (error) {
       final String message = _friendlyErrorMessage(
         error,
@@ -362,11 +366,20 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
         if (rawId is String) {
           final ItemRecord? existingItem = _findItemById(rawId);
+
+          if (existingItem == null) {
+            // For newly created items, we may only receive id/ts in the event.
+            // Refetch to retrieve the complete record (e.g., name).
+            unawaited(_fetchItems());
+            _notifyUser('Real-time: new item detected', showSnackBar: false);
+            return;
+          }
+
           final String parsedTs =
-              ItemRecord.tryParseTsObjectId(rawTs) ?? existingItem?.ts ?? rawId;
+              ItemRecord.tryParseTsObjectId(rawTs) ?? existingItem.ts;
           final ItemRecord updatedItem = ItemRecord(
             id: rawId,
-            name: existingItem?.name ?? 'unknown',
+            name: existingItem.name,
             ts: parsedTs,
           );
           _applyItemUpdate(updatedItem);

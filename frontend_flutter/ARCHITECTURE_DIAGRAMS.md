@@ -75,16 +75,12 @@ sequenceDiagram
 ```
 
 **คำอธิบาย:**
-1. ผู้ใช้เปิด App → เชื่อมต่อ REST Client และ Socket.IO
-2. โหลดข้อมูล Items จาก Backend
-3. ผู้ใช้กด "Add Item" → เปิด Dialog Form
-4. กรอกข้อมูล และ Submit
-5. Flutter ส่ง POST /items ไปยัง Backend
-6. Backend บันทึก ลง MongoDB
-7. MongoDB Change Stream ส่ง Event ไปยัง Gateway
-8. Gateway Emit `ts_changed` ไปยัง Flutter App
-9. Flutter ได้รับการแจ้งเตือน และ GET /items เพื่อ Refetch
-10. UI Update ด้วยข้อมูลล่าสุด
+1. App เริ่มต้น → `initState`: `_fetchItems()` และ `_connectSocket()` พร้อมกัน
+2. `_fetchItems()`: GET /items → parse JSON → render ListView
+3. `_connectSocket()`: เชื่อมต่อ Gateway → ตั้ง listener `ts_changed`
+4. ผู้ใช้พิมพ์ชื่อ และกด Create → `_createItem()`: POST /items → เคลียร input
+5. `ts_changed` ถึง: ถ้า item ไม่อยู่ใน memory → `_fetchItems()` (refetch). ถ้าอยู่ → update ts in-memory
+6. กด "Update ts" → `_refreshTs(id)`: PATCH /items/:id/ts → update item in-memory → fallback refetch ถ้า ts ไม่เปลี่ยน
 
 ---
 
@@ -165,37 +161,24 @@ flowchart TD
 **คำอธิบาย - User Interaction Flow:**
 
 1. **Initialization**
-   - สร้าง HTTP Client สำหรับ REST API
-   - Initialize Socket.IO เชื่อมต่อ WebSocket
-   - Subscribe ไปยัง `ts_changed` Event
+   - `initState`: `_fetchItems()` + `_connectSocket()` อัตโนมัติ
 
 2. **Load Data**
-   - ส่ง GET /items ไปยัง Backend
-   - Parse JSON Response
-   - Build ListView แสดงข้อมูล
+   - `_fetchItems()`: GET /items → sort ตาม updatedAt desc → build ListView
 
-3. **Add Item Flow**
-   - ผู้ใช้กด "Add Item"
-   - เปิด Dialog Form
-   - ตรวจสอบความถูกต้องของข้อมูล
-   - ส่ง POST /items ไปยัง Backend
-   - รอการแจ้งเตือน `ts_changed`
-   - Refetch ข้อมูลล่าสุด
-   - Update UI
+3. **Create Item Flow**
+   - ผู้ใช้พิมพ์ชื่อ และกด Create → `_createItem()`
+   - POST /items { name } → 201 → clear input, แสดง notification
+   - รอ event `ts_changed` จาก Gateway
 
-4. **Edit Item Flow**
-   - เปิด Edit Dialog
-   - แก้ไขข้อมูล
-   - ส่ง PATCH /items/:id
-   - รอการแจ้งเตือน
-   - Refetch และ Update
+4. **Refresh ts Flow**
+   - กด "Update ts" → `_refreshTs(id)`: PATCH /items/:id/ts
+   - อัปเดต item.ts ใน memory จาก response
+   - ถ้า ts ไม่เปลี่ยน → fallback `_fetchItems()`
 
-5. **Delete Item Flow**
-   - ผู้ใช้เลือก Delete
-   - แสดง Confirmation Dialog
-   - ส่ง DELETE /items/:id
-   - รอการแจ้งเตือน
-   - Refetch และ Update
+5. **ts_changed Handler**
+   - ถ้า id ไม่อยู่ใน memory (item ใหม่) → `_fetchItems()` (refetch เพื่อดึง name)
+   - ถ้าอยู่ใน memory → `_applyItemUpdate()` (update ts in-place)
 
 ---
 
@@ -204,75 +187,50 @@ flowchart TD
 ### Main Widget Tree
 
 ```
-MyApp
-├── MaterialApp
-│   └── ItemsScreen
-│       ├── AppBar
-│       │   ├── Title: "Items"
-│       │   └── FloatingActionButton: Add
-│       ├── Body: ItemsList
-│       │   └── ListView.builder
-│       │       └── ItemTile (for each item)
-│       │           ├── ListTile
-│       │           ├── Edit Button
-│       │           └── Delete Button
-│       └── BottomNavigationBar
-│
-├── Dialogs
-│   ├── AddItemDialog
-│   │   ├── TextField: name
-│   │   ├── TextField: description
-│   │   ├── Button: Cancel
-│   │   └── Button: Submit
-│   ├── EditItemDialog
-│   │   └── Similar to AddItemDialog
-│   └── ConfirmDialog
-│       ├── Text: "Delete?"
-│       ├── Button: Cancel
-│       └── Button: Confirm
-│
-└── Services
-    ├── ApiService
-    │   ├── createItem()
-    │   ├── getItems()
-    │   ├── updateItem()
-    │   └── deleteItem()
-    └── WebSocketService
-        ├── connect()
-        ├── disconnect()
-        ├── subscribe()
-        └── onTsChanged()
+RealtimeApp (StatelessWidget)
+└── MaterialApp (title: 'Realtime ts Change Demo')
+    └── RealtimeHomePage (StatefulWidget)
+        └── Scaffold
+            ├── AppBar
+            │   ├── title: 'Realtime ts Change Demo'
+            │   └── actions:
+            │       ├── IconButton (notifications badge + count)
+            │       └── IconButton (refresh)
+            └── body: Padding
+                └── Column
+                    ├── Row
+                    │   ├── TextField (item name)
+                    │   └── FilledButton 'Create'
+                    ├── LinearProgressIndicator (loading)
+                    ├── Text (inline error, red)
+                    └── Expanded
+                        └── ListView.builder
+                            └── Card > ListTile
+                                ├── leading: Icon
+                                ├── title: item.name
+                                ├── subtitle: 'id: ..., ts: ...'
+                                └── trailing: OutlinedButton 'Update ts'
 ```
 
 ---
 
-## 🔧 Service Classes
+## 🔧 State & Logic (lib/main.dart)
 
-### ApiService (HTTP Client)
+โค้ดทั้งหมดอยู่ในไฟล์เดียว `lib/main.dart` (ไม่แยก service/model)
 
-```dart
-class ApiService {
-  final String baseUrl = 'http://localhost:3000';
-  
-  Future<Item> createItem(String name, String description)
-  Future<List<Item>> getItems()
-  Future<Item> updateItem(String id, String name, String description)
-  Future<void> deleteItem(String id)
-}
-```
+| Class | ความbookรับผิดชอบ |
+|-------|-------|
+| `RealtimeApp` | MaterialApp root |
+| `RealtimeHomePage` | StatefulWidget หลัก |
+| `_RealtimeHomePageState` | state: items, socket, loading, error, notifications |
+| `ItemRecord` | data class (`id`, `name`, `ts`) พร้อม `fromJson()` |
 
-### WebSocketService (Socket.IO Client)
-
-```dart
-class WebSocketService {
-  final String socketUrl = 'http://localhost:3001';
-  
-  Future<void> connect()
-  Future<void> disconnect()
-  void subscribeToTsChanged(Function callback)
-  void unsubscribeFromTsChanged()
-}
-```
+**เม็ธอดหลัก:**
+- `_fetchItems()`: GET /items, `setState` อัปเดต `_items`
+- `_createItem()`: POST /items, clear input เมื่อสำเร็จ
+- `_refreshTs(id)`: PATCH /items/:id/ts, `_applyItemUpdate()` จาก response
+- `_connectSocket()`: ตั้ง Socket.IO และ `ts_changed` handler
+- `_applyItemUpdate(item)`: อัปเดต item ใน `_items` list in-place
 
 ---
 
@@ -315,14 +273,18 @@ flutter pub get
 
 ### Configuration
 
-**lib/config/constants.dart:**
+ค่า `apiBaseUrl` และ `socketBaseUrl` บันทึกเป็น `String.fromEnvironment` (ส่งผ่าน `--dart-define`):
+
 ```dart
-class Config {
-  static const String apiBaseUrl = 'http://localhost:3000';
-  static const String socketBaseUrl = 'http://localhost:3001';
-  static const int connectTimeout = 30000; // ms
-  static const int receiveTimeout = 30000; // ms
-}
+const String apiBaseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'http://localhost:3000',
+);
+const String socketBaseUrl = String.fromEnvironment(
+  'SOCKET_BASE_URL',
+  defaultValue: 'http://localhost:3001',
+);
+const Duration apiTimeout = Duration(seconds: 8);
 ```
 
 ### Running
@@ -351,26 +313,10 @@ flutter run -d web-server
 ```
 frontend_flutter/
 ├── lib/
-│   ├── main.dart                    # Entry point
-│   ├── config/
-│   │   └── constants.dart          # Configuration
-│   ├── models/
-│   │   └── item.dart               # Item data model
-│   ├── screens/
-│   │   └── items_screen.dart       # Main screen
-│   ├── widgets/
-│   │   ├── item_tile.dart          # Item list tile
-│   │   ├── add_item_dialog.dart    # Add dialog
-│   │   └── dialogs.dart            # Other dialogs
-│   ├── services/
-│   │   ├── api_service.dart        # HTTP client
-│   │   ├── websocket_service.dart  # Socket.IO client
-│   │   └── item_service.dart       # Business logic
-│   └── utils/
-│       └── logger.dart             # Logging
+│   └── main.dart   # โค้ดทั้งหมด (RealtimeApp, RealtimeHomePage, ItemRecord)
 ├── test/
-│   └── widget_test.dart            # Widget tests
-├── pubspec.yaml                    # Dependencies
+│   └── widget_test.dart
+├── pubspec.yaml
 └── README.md
 ```
 
@@ -383,39 +329,31 @@ frontend_flutter/
 dependencies:
   flutter:
     sdk: flutter
-  http: ^1.1.0                      # HTTP client
-  socket_io_client: ^2.0.0          # Socket.IO client
-  provider: ^6.0.0                  # State management
-  json_serializable: ^6.0.0          # JSON serialization
-  equatable: ^2.0.5                 # Value equality
+  cupertino_icons: ^1.0.8
+  http: ^1.6.0
+  socket_io_client: ^3.1.4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  mockito: ^5.4.0                   # Mocking
+  flutter_lints: ^5.0.0
 ```
 
 ---
 
 ## 🔄 State Management
 
-### Using Provider Pattern
+ใช้ `StatefulWidget` + `setState` เป็น state management ไม่ใช้ Provider หรือ library ภายนอก
 
-```dart
-class ItemProvider extends ChangeNotifier {
-  List<Item> items = [];
-  bool isLoading = false;
-  
-  Future<void> loadItems() { ... }
-  Future<void> createItem(Item item) { ... }
-  Future<void> updateItem(Item item) { ... }
-  Future<void> deleteItem(String id) { ... }
-  
-  void onTsChanged() {
-    loadItems(); // Refetch when notified
-  }
-}
-```
+| State variable | ความหมาย |
+|---------------|----------|
+| `_items` | `List<ItemRecord>` รายการที่แสดงอยู่ |
+| `_isLoading` | แสดง LinearProgressIndicator |
+| `_error` | เป็น inline error message (null = no error) |
+| `_updatingItemIds` | `Set<String>` id ที่กำลัง PATCH → disable button |
+| `_notificationCount` | จำนวน ts_changed events ที่ได้รับ |
+| `_lastNotification` | ข้อความ notification ล่าสุด |
+| `_socket` | Socket.IO client instance |
 
 ---
 
@@ -427,19 +365,17 @@ class ItemProvider extends ChangeNotifier {
 - Web needs `http://localhost`
 
 ✅ **Socket.IO Connection**
-- Automatic reconnection with exponential backoff
-- Connection timeout: 30 seconds
-- Keep-alive with ping/pong
+- `autoConnect: false` (connect ด้วย `socket.connect()` ใน `_connectSocket()`)
+- Transport: websocket เท่านั้น
+- ไม่มี ping/pong custom events (ใช้ Socket.IO built-in heartbeat)
 
 ✅ **Error Handling**
-- Show user-friendly error messages
-- Log errors for debugging
-- Retry failed requests with exponential backoff
+- แสดง user-friendly error message เป็น inline text (ไม่ใช่ dialog)
+- รองรับ TimeoutException, SocketException, ClientException
 
 ✅ **Real-time Updates**
-- Listen to `ts_changed` event continuously
-- Refetch data when notification received
-- Debounce rapid updates (max 1 refetch per second)
+- เมื่อได้รับ `ts_changed`: update item in-memory (in-place)
+- fallback `GET /items` เฉพาะเมื่อ item id ไม่อยู่ใน memory (หรือ ts ไม่เปลี่ยนหลัง PATCH)
 
 ---
 

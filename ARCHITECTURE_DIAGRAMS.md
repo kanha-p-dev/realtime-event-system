@@ -38,35 +38,34 @@ sequenceDiagram
 
     alt Create Item
         User->>FE: กดเพิ่มข้อมูล
-        FE->>BE: POST /items
+        FE->>BE: POST /items { name }
         BE->>DB: Insert document
         DB-->>BE: created document
         BE-->>FE: 201 Created
-        FE->>BE: GET /items (refresh list หลังสร้างสำเร็จ)
-        BE->>DB: Query latest items
-        DB-->>BE: latest list
-        BE-->>FE: 200 OK + latest list
+        FE->>FE: clear input, แสดง 'สร้างสำเร็จ กำลังรอ real-time event...'
     else Refresh ts
         User->>FE: กดปุ่ม Update ts
         FE->>BE: PATCH /items/:id/ts
         BE->>DB: Update ts ด้วย ObjectId ใหม่
         DB-->>BE: updated document
-        BE-->>FE: 200 OK
+        BE-->>FE: 200 OK + updated item
+        FE->>FE: update item.ts ใน memory จาก response
     end
 
     Note over DB,GW: MongoDB Change Stream แจ้งการเปลี่ยนแปลง
     DB->>GW: change event (insert/update/delete)
-    GW->>GW: Process event + Build payload
-    GW-->>FE: Emit ts_changed {id, ts, source}
-    GW-->>Clients: Emit ts_changed {id, ts, source}
+    GW->>GW: debounce 50ms + coalesce per-id
+    GW-->>FE: Emit ts_changed { id, ts: {$oid}, source }
+    GW-->>Clients: Emit ts_changed { id, ts: {$oid}, source }
 
     Note over FE,BE: Frontend รับ event แล้วอัปเดต item ใน memory ตาม id
-    FE->>FE: Apply partial update (id, ts) ใน ListView
-    opt กรณี ts ไม่เปลี่ยนหรือข้อมูลไม่ครบ
-        FE->>BE: GET /items (fallback refetch)
+    alt item id ไม่พบใน memory (item ใหม่)
+        FE->>BE: GET /items (refetch เพื่อดึง name และ ts)
         BE->>DB: Query latest items
         DB-->>BE: latest list
         BE-->>FE: 200 OK + latest list
+    else item id พบใน memory
+        FE->>FE: update item.ts in-place (in-memory)
     end
     FE->>FE: Update UI (near real-time)
 ```
@@ -93,15 +92,15 @@ flowchart TD
     K --> M[MongoDB อ่านข้อมูล]
 
     L --> N[MongoDB Change Stream Trigger]
-    N --> O[Gateway รับ Event\nprocess + emit ts_changed {id, ts, source}]
+    N --> O[Gateway รับ Event\ndebounce 50ms + coalesce per-id\nemit ts_changed { id, ts: {$oid}, source }]
     O --> P[Frontend ที่ออนไลน์ทั้งหมดได้รับ ts_changed]
-    P --> Q[แต่ละ Frontend อัปเดต item ใน memory ตาม id]
-    Q --> Q1{ต้อง fallback refetch ไหม}
-    Q1 -->|ใช่| M
-    Q1 -->|ไม่| S
+    P --> Q{item id\nอยู่ใน memory?}
+    Q -->|ใช่| Q2[update item.ts in-memory]
+    Q -->|ไม่| M
 
     M --> R[Backend ส่งข้อมูลล่าสุดกลับ]
     R --> S[Flutter Update UI ให้ตรงกัน]
+    Q2 --> S
     S --> G
 
     style A fill:#dff7df
@@ -117,9 +116,9 @@ flowchart TD
 1. Frontend เชื่อมต่อทั้ง REST และ WebSocket ตั้งแต่เริ่มต้น
 2. API หลักที่ใช้คือ `POST /items`, `GET /items`, `PATCH /items/:id/ts`
 3. MongoDB Change Stream แจ้ง Gateway เมื่อข้อมูลเปลี่ยน
-4. Gateway broadcast `ts_changed` payload (`id`, `ts`, `source`) ไปยังทุก client ที่ออนไลน์
-5. Frontend ปกติจะอัปเดตข้อมูลใน memory จาก event โดยไม่ต้อง refetch ทุกครั้ง
-6. Frontend จะ fallback refetch เฉพาะบางกรณี (เช่นข้อมูลไม่ครบหรือ ts ไม่เปลี่ยนตามคาด)
+4. Gateway broadcast `ts_changed` payload `{ id, ts: { $oid }, source }` ไปยังทุก client ที่ออนไลน์ (เฉพาะ leader instance เท่านั้น)
+5. Frontend อัปเดต item.ts in-memory ถ้า id พบในรายการ; ถ้าไม่พบ → refetch GET /items
+6. Frontend จะ fallback refetch เพิ่มเติมเมื่อ ts ไม่เปลี่ยนหลัง PATCH /items/:id/ts
 7. UI ของทุก client จึง sync ตรงกันแบบ near real-time
 
 ผลลัพธ์คือเห็นภาพรวมการทำงานของทั้ง 3 services ชัดเจนใน flow เดียวแบบ End-to-End

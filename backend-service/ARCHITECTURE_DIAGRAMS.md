@@ -27,22 +27,17 @@ sequenceDiagram
     MongoDB-->>API: ส่งคืน Item List
     API-->>ผู้ใช้: ส่งคืน 200 OK<br/>พร้อมรายการ
 
-    ผู้ใช้->>API: HTTP PATCH /items/:id<br/>(อัปเดต Item)
-    API->>MongoDB: อัปเดต Document
+    ผู้ใช้->>API: HTTP PATCH /items/:id/ts<br/>(รีเฟรช ts)
+    API->>MongoDB: อัปเดต ts ด้วย ObjectId ใหม่
     MongoDB-->>API: ส่งคืน Updated Document
     API-->>ผู้ใช้: ส่งคืน 200 OK<br/>พร้อมข้อมูลที่อัปเดต
-
-    ผู้ใช้->>API: HTTP DELETE /items/:id
-    API->>MongoDB: ลบ Document
-    MongoDB-->>API: ยืนยันการลบ
-    API-->>ผู้ใช้: ส่งคืน 200 OK
 ```
 
 **คำอธิบาย:**
 - Backend Service เป็น NestJS API Server ที่ทำงานบน PORT 3000
-- รับ HTTP Requests จาก Frontend สำหรับ CRUD Operations
-- ตรวจสอบความถูกต้องของข้อมูลก่อนบันทึก
-- บันทึก/อ่าน/อัปเดต/ลบ ข้อมูล ในคอลเลคชัน `items` ใน MongoDB Atlas
+- รับ HTTP Requests จาก Frontend สำหรับ 3 endpoints
+- ตรวจสอบความถูกต้องของข้อมูลก่อนบันทึก (ValidationPipe)
+- บันทึก/อ่าน/อัปเดต ts ข้อมูล ในคอลเลคชัน `items` ใน MongoDB Atlas
 - ส่ง Response กลับไปยัง Frontend พร้อมข้อมูลหรือ Error Message
 
 ---
@@ -57,9 +52,7 @@ flowchart TD
     
     B -->|POST /items| C["📝 Create Item<br/>ตรวจสอบข้อมูล<br/>Validation"]
     B -->|GET /items| D["📖 Read Items<br/>ดึงข้อมูลทั้งหมด"]
-    B -->|PATCH /items/:id| E["✏️ Update Item<br/>อัปเดตข้อมูล"]
-    B -->|DELETE /items/:id| F["🗑️ Delete Item<br/>ลบข้อมูล"]
-    B -->|GET /health| G["🏥 Health Check<br/>ตรวจสอบสถานะ"]
+    B -->|PATCH /items/:id/ts| E["✏️ Refresh ts<br/>อัปเดต ts ด้วย ObjectId ใหม่"]
     
     C --> H{"ข้อมูล<br/>ถูกต้อง?"}
     H -->|ใช่| I["💾 MongoDB Insert<br/>บันทึกข้อมูลใหม่"]
@@ -67,70 +60,48 @@ flowchart TD
     I --> K["✅ Response 201<br/>Created"]
     J --> L["📤 Send Response"]
     
-    D --> M["🔍 MongoDB Query<br/>ดึง Item List"]
+    D --> M["🔍 MongoDB find()<br/>sort updatedAt desc"]
     M --> N["✅ Response 200<br/>OK with Data"]
     
-    E --> O["🔍 Find Item by ID<br/>ค้นหา Item"]
+    E --> O["🔍 Validate ObjectId<br/>ค้นหา Item by ID"]
     O --> P{"Item<br/>มีอยู่?"}
-    P -->|ใช่| Q["📝 Update Document<br/>อัปเดตข้อมูล"]
+    P -->|ใช่| Q["📝 Set ts = new ObjectId()<br/>findByIdAndUpdate"]
     P -->|ไม่| R["❌ Error 404<br/>Not Found"]
-    Q --> S["✅ Response 200<br/>Updated"]
+    Q --> S["✅ Response 200<br/>Updated Item"]
     R --> L
-    
-    F --> T["🔍 Find Item by ID<br/>ค้นหา Item"]
-    T --> U{"Item<br/>มีอยู่?"}
-    U -->|ใช่| V["🗑️ Delete Document<br/>ลบข้อมูล"]
-    U -->|ไม่| W["❌ Error 404<br/>Not Found"]
-    V --> X["✅ Response 200<br/>Deleted"]
-    W --> L
-    
-    G --> Y["✅ Response 200<br/>OK - Service is Running"]
     
     K --> L
     N --> L
     S --> L
-    X --> L
-    Y --> L
     L --> Z["📤 Send HTTP Response<br/>กลับไปยัง Client"]
 ```
 
 **คำอธิบาย - Request Processing:**
 
 1. **POST /items** (Create)
-   - ตรวจสอบความถูกต้องของ Request Body
-   - ถ้าถูกต้อง → Insert ลงใน MongoDB → Return 201 Created
+   - ตรวจสอบความถูกต้องของ Request Body (`name`: string, MaxLength 100)
+   - ถ้าถูกต้อง → Insert ลงใน MongoDB (พร้อม `ts = new ObjectId()`) → Return 201 Created
    - ถ้าไม่ถูก → Return 400 Bad Request
 
-2. **GET /items** (Read)
-   - Query ดึงทั้งหมด Items จาก MongoDB
+2. **GET /items** (Read All)
+   - Query ดึงทั้งหมด Items จาก MongoDB เรียงตาม `updatedAt` descending
    - Return 200 OK พร้อมข้อมูล
 
-3. **PATCH /items/:id** (Update)
+3. **PATCH /items/:id/ts** (Refresh ts)
+   - ตรวจสอบว่า id เป็น ObjectId format
    - ค้นหา Item by ID
-   - ถ้ามี → Update Document → Return 200 OK
-   - ถ้าไม่มี → Return 404 Not Found
-
-4. **DELETE /items/:id** (Delete)
-   - ค้นหา Item by ID
-   - ถ้ามี → Delete Document → Return 200 OK
-   - ถ้าไม่มี → Return 404 Not Found
-
-5. **GET /health** (Health Check)
-   - ตรวจสอบสถานะของ Service
-   - Return 200 OK ถ้า Service ทำงานปกติ
+   - ถ้ามี → อัปเดต `ts = new ObjectId()` → Return 200 OK พร้อม Updated Item
+   - ถ้าไม่มี (หรือ id ไม่ใช่ ObjectId format) → Return 404 Not Found
 
 ---
 
 ## 📊 API Endpoints
 
-| Method | Endpoint | ความสำคัญ | คำอธิบาย |
-|--------|----------|-----------|----------|
-| POST | `/items` | ⭐⭐⭐ | สร้าง Item ใหม่ |
-| GET | `/items` | ⭐⭐⭐ | ดึงรายการ Items ทั้งหมด |
-| GET | `/items/:id` | ⭐⭐ | ดึง Item เดี่ยว by ID |
-| PATCH | `/items/:id` | ⭐⭐⭐ | อัปเดต Item |
-| DELETE | `/items/:id` | ⭐⭐ | ลบ Item |
-| GET | `/health` | ⭐ | ตรวจสอบสถานะ Service |
+| Method | Endpoint | Status Code | คำอธิบาย |
+|--------|----------|-------------|----------|
+| POST | `/items` | 201 | สร้าง Item ใหม่ |
+| GET | `/items` | 200 | ดึงรายการ Items ทั้งหมด |
+| PATCH | `/items/:id/ts` | 200 | รีเฟรช ts ด้วย ObjectId ใหม่ |
 
 ---
 
@@ -138,11 +109,10 @@ flowchart TD
 
 ### Create Item (POST /items)
 
-**Request:**
+**Request Body:**
 ```json
 {
-  "name": "sensor-A",
-  "description": "Temperature sensor in room A"
+  "name": "sensor-A"
 }
 ```
 
@@ -151,9 +121,10 @@ flowchart TD
 {
   "_id": "507f1f77bcf86cd799439011",
   "name": "sensor-A",
-  "description": "Temperature sensor in room A",
+  "ts": "6820e4f3b7c2a1d3e5f60789",
   "createdAt": "2026-05-12T10:30:00.000Z",
-  "updatedAt": "2026-05-12T10:30:00.000Z"
+  "updatedAt": "2026-05-12T10:30:00.000Z",
+  "__v": 0
 }
 ```
 
@@ -165,36 +136,30 @@ flowchart TD
   {
     "_id": "507f1f77bcf86cd799439011",
     "name": "sensor-A",
-    "description": "Temperature sensor in room A",
+    "ts": "6820e4f3b7c2a1d3e5f60789",
     "createdAt": "2026-05-12T10:30:00.000Z",
     "updatedAt": "2026-05-12T10:30:00.000Z"
   },
   {
     "_id": "507f1f77bcf86cd799439012",
     "name": "sensor-B",
-    "description": "Humidity sensor in room B",
+    "ts": "6820e4f3b7c2a1d3e5f6078a",
     "createdAt": "2026-05-12T10:35:00.000Z",
     "updatedAt": "2026-05-12T10:35:00.000Z"
   }
 ]
 ```
 
-### Update Item (PATCH /items/:id)
+### Refresh ts (PATCH /items/:id/ts)
 
-**Request:**
-```json
-{
-  "name": "sensor-A",
-  "description": "Updated temperature sensor"
-}
-```
+**Request:** No body required
 
 **Response (200 OK):**
 ```json
 {
   "_id": "507f1f77bcf86cd799439011",
   "name": "sensor-A",
-  "description": "Updated temperature sensor",
+  "ts": "6820e4f9a3b1c2d4e5f60790",
   "createdAt": "2026-05-12T10:30:00.000Z",
   "updatedAt": "2026-05-12T10:45:00.000Z"
 }
@@ -255,4 +220,4 @@ backend-service/
 
 ---
 
-**หมายเหตุ:** Backend Service เป็นส่วนที่จัดการ CRUD Operations และเชื่อมต่อกับ MongoDB Atlas โดยตรง
+**หมายเหตุ:** Backend Service เป็นส่วนที่จัดการ 3 endpoints (`POST /items`, `GET /items`, `PATCH /items/:id/ts`) และเชื่อมต่อกับ MongoDB Atlas โดยตรง
