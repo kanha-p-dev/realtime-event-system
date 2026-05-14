@@ -166,7 +166,9 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
     try {
       final Uri uri = Uri.parse('$apiBaseUrl/items');
-      final http.Response response = await http.get(uri).timeout(apiTimeout);
+      final http.Response response = await http
+          .get(uri, headers: <String, String>{'x-channel-id': _channelId})
+          .timeout(apiTimeout);
 
       if (response.statusCode != 200) {
         throw Exception('โหลดรายการไม่สำเร็จ');
@@ -231,10 +233,6 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       }
 
       _nameController.clear();
-      _notifyUser(
-        'เพิ่มรายการสำเร็จแล้ว กำลังรอเหตุการณ์เรียลไทม์...',
-        showSnackBar: false,
-      );
     } catch (error) {
       final String message = _friendlyErrorMessage(
         error,

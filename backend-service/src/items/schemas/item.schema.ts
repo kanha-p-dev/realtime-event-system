@@ -11,6 +11,9 @@ export class Item {
   @Prop({ required: true, default: () => new Types.ObjectId() })
   ts!: Types.ObjectId;
 
+  @Prop({ required: true, trim: true, maxlength: 120 })
+  ownerChannelId!: string;
+
   @Prop({ required: false, trim: true, maxlength: 120 })
   lastUpdatedByChannel?: string;
 

@@ -25,8 +25,8 @@ export class ItemsController {
   }
 
   @Get()
-  async findAll(): Promise<Item[]> {
-    return this.itemsService.findAll();
+  async findAll(@Headers('x-channel-id') channelId?: string): Promise<Item[]> {
+    return this.itemsService.findAll(channelId);
   }
 
   @Patch(':id/ts')

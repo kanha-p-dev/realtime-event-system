@@ -51,7 +51,9 @@ export class RealtimeGateway
       return;
     }
 
-    this.server.emit('ts_changed', payload);
+    this.logger.warn(
+      `Skipped ts_changed broadcast without channelId (itemId=${payload.id})`,
+    );
   }
 
   private extractChannelId(client: Socket): string | undefined {

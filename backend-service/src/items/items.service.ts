@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { CreateItemDto } from './dto/create-item.dto';
@@ -17,11 +22,12 @@ export class ItemsService {
     createItemDto: CreateItemDto,
     channelId?: string,
   ): Promise<Item> {
-    const normalizedChannelId = this.normalizeChannelId(channelId);
+    const normalizedChannelId = this.requireChannelId(channelId);
 
     const item = new this.itemModel({
       name: createItemDto.name,
       ts: new Types.ObjectId(),
+      ownerChannelId: normalizedChannelId,
       lastUpdatedByChannel: normalizedChannelId,
     });
     const savedItem = await item.save();
@@ -31,15 +37,20 @@ export class ItemsService {
     return savedItem;
   }
 
-  async findAll(): Promise<Item[]> {
+  async findAll(channelId?: string): Promise<Item[]> {
+    const normalizedChannelId = this.requireChannelId(channelId);
+
     const items = await this.itemModel
       .find({
+        ownerChannelId: normalizedChannelId,
         $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
       })
       .sort({ updatedAt: -1 })
       .lean()
       .exec();
-    this.logger.log(`list_items success count=${items.length}`);
+    this.logger.log(
+      `list_items success count=${items.length} channelId=${normalizedChannelId}`,
+    );
     return items;
   }
 
@@ -49,11 +60,15 @@ export class ItemsService {
       throw new NotFoundException('Item not found');
     }
 
-    const normalizedChannelId = this.normalizeChannelId(channelId);
+    const normalizedChannelId = this.requireChannelId(channelId);
 
     const updatedItem = await this.itemModel
-      .findByIdAndUpdate(
-        id,
+      .findOneAndUpdate(
+        {
+          _id: id,
+          ownerChannelId: normalizedChannelId,
+          $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
+        },
         {
           $set: {
             ts: new Types.ObjectId(),
@@ -82,12 +97,13 @@ export class ItemsService {
       throw new NotFoundException('Item not found');
     }
 
-    const normalizedChannelId = this.normalizeChannelId(channelId);
+    const normalizedChannelId = this.requireChannelId(channelId);
 
     const deletedItem = await this.itemModel
       .findOneAndUpdate(
         {
           _id: id,
+          ownerChannelId: normalizedChannelId,
           $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
         },
         {
@@ -114,14 +130,14 @@ export class ItemsService {
     return deletedItem;
   }
 
-  private normalizeChannelId(channelId?: string): string | undefined {
+  private requireChannelId(channelId?: string): string {
     if (!channelId) {
-      return undefined;
+      throw new BadRequestException('Missing x-channel-id header');
     }
 
     const trimmed = channelId.trim();
     if (!ItemsService.channelIdRegex.test(trimmed)) {
-      return undefined;
+      throw new BadRequestException('Invalid x-channel-id header');
     }
 
     return trimmed;
