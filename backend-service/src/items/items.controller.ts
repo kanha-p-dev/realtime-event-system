@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
@@ -34,5 +35,13 @@ export class ItemsController {
     @Headers('x-channel-id') channelId?: string,
   ): Promise<Item> {
     return this.itemsService.refreshTs(id, channelId);
+  }
+
+  @Delete(':id')
+  async remove(
+    @Param('id') id: string,
+    @Headers('x-channel-id') channelId?: string,
+  ): Promise<Item> {
+    return this.itemsService.remove(id, channelId);
   }
 }

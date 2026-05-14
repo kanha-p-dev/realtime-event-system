@@ -33,7 +33,9 @@ export class ItemsService {
 
   async findAll(): Promise<Item[]> {
     const items = await this.itemModel
-      .find()
+      .find({
+        $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
+      })
       .sort({ updatedAt: -1 })
       .lean()
       .exec();
@@ -72,6 +74,44 @@ export class ItemsService {
       `refresh_item_ts success itemId=${String(updatedItem._id)} newTs=${String(updatedItem.ts)} channelId=${normalizedChannelId ?? 'none'}`,
     );
     return updatedItem;
+  }
+
+  async remove(id: string, channelId?: string): Promise<Item> {
+    if (!Types.ObjectId.isValid(id)) {
+      this.logger.warn(`delete_item invalid_id id=${id}`);
+      throw new NotFoundException('Item not found');
+    }
+
+    const normalizedChannelId = this.normalizeChannelId(channelId);
+
+    const deletedItem = await this.itemModel
+      .findOneAndUpdate(
+        {
+          _id: id,
+          $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
+        },
+        {
+          $set: {
+            deletedAt: new Date(),
+            ts: new Types.ObjectId(),
+            lastUpdatedByChannel: normalizedChannelId,
+          },
+        },
+        { returnDocument: 'after', runValidators: true },
+      )
+      .lean()
+      .exec();
+
+    if (!deletedItem) {
+      this.logger.warn(`delete_item not_found id=${id}`);
+      throw new NotFoundException('Item not found');
+    }
+
+    this.logger.log(
+      `delete_item success itemId=${String(deletedItem._id)} channelId=${normalizedChannelId ?? 'none'}`,
+    );
+
+    return deletedItem;
   }
 
   private normalizeChannelId(channelId?: string): string | undefined {

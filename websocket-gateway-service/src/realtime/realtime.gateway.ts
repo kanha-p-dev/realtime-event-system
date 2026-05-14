@@ -12,6 +12,7 @@ interface TsChangedPayload {
   ts: { $oid: string };
   source: string;
   channelId?: string;
+  deleted?: boolean;
 }
 
 @WebSocketGateway({

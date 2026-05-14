@@ -27,7 +27,7 @@ class RealtimeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Realtime Event Demo',
+      title: 'เดโมเหตุการณ์เรียลไทม์',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
       ),
@@ -89,11 +89,13 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
   final TextEditingController _nameController = TextEditingController();
   List<ItemRecord> _items = <ItemRecord>[];
   final Set<String> _updatingItemIds = <String>{};
+  final Set<String> _deletingItemIds = <String>{};
   final Set<String> _pendingLocalUpdates = <String>{};
+  final Set<String> _pendingLocalDeletes = <String>{};
   bool _isLoading = false;
   String? _error;
   int _notificationCount = 0;
-  String _lastNotification = 'No notifications yet';
+  String _lastNotification = 'ยังไม่มีการแจ้งเตือน';
   io.Socket? _socket;
   late final String _channelId = _createChannelId();
 
@@ -230,7 +232,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
       _nameController.clear();
       _notifyUser(
-        'สร้างสำเร็จแล้ว กำลังรอ real-time event...',
+        'เพิ่มรายการสำเร็จแล้ว กำลังรอเหตุการณ์เรียลไทม์...',
         showSnackBar: false,
       );
     } catch (error) {
@@ -292,6 +294,76 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
     }
   }
 
+  Future<void> _deleteItem(String id) async {
+    if (_deletingItemIds.contains(id)) {
+      return;
+    }
+
+    setState(() {
+      _deletingItemIds.add(id);
+    });
+
+    _pendingLocalDeletes.add(id);
+
+    try {
+      final Uri uri = Uri.parse('$apiBaseUrl/items/$id');
+      final http.Response response = await http
+          .delete(uri, headers: <String, String>{'x-channel-id': _channelId})
+          .timeout(apiTimeout);
+
+      if (response.statusCode != 200) {
+        throw Exception('ลบรายการไม่สำเร็จ (สถานะ: ${response.statusCode})');
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _items = _items.where((ItemRecord item) => item.id != id).toList();
+      });
+    } catch (error) {
+      _pendingLocalDeletes.remove(id);
+      final String message = _friendlyErrorMessage(
+        error,
+        fallbackMessage: 'ไม่สามารถลบรายการได้',
+      );
+      _setInlineError(message);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _deletingItemIds.remove(id);
+        });
+      }
+    }
+  }
+
+  Future<void> _confirmDeleteItem(ItemRecord item) async {
+    final bool? shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('ยืนยันการลบ'),
+          content: Text('ต้องการลบ "${item.name}" ใช่หรือไม่?'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('ยกเลิก'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('ลบ'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete == true) {
+      await _deleteItem(item.id);
+    }
+  }
+
   ItemRecord? _findItemById(String id) {
     for (final ItemRecord item in _items) {
       if (item.id == id) {
@@ -344,11 +416,11 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               const Text(
-                'Notifications',
+                'การแจ้งเตือน',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              Text('Count: $_notificationCount'),
+              Text('จำนวน: $_notificationCount'),
               const SizedBox(height: 8),
               Text(_lastNotification),
               const SizedBox(height: 12),
@@ -364,7 +436,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
                       _notificationCount = 0;
                     });
                   },
-                  child: const Text('Clear badge'),
+                  child: const Text('ล้างตัวนับ'),
                 ),
               ),
             ],
@@ -383,22 +455,42 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
     socket.onConnect((_) {
       _setInlineError('');
-      _notifyUser('Connected to realtime gateway');
+      _notifyUser('เชื่อมต่อระบบเรียลไทม์สำเร็จ');
     });
 
     socket.on('ts_changed', (dynamic payload) {
       if (payload is Map<String, dynamic>) {
         final dynamic rawId = payload['id'] ?? payload['_id'];
         final dynamic rawTs = payload['ts'];
+        final bool isDeleted = payload['deleted'] == true;
 
         if (rawId is String) {
+          if (isDeleted) {
+            if (!mounted) {
+              return;
+            }
+
+            setState(() {
+              _items = _items
+                  .where((ItemRecord item) => item.id != rawId)
+                  .toList();
+            });
+
+            if (_pendingLocalDeletes.remove(rawId)) {
+              return;
+            }
+
+            _notifyUser('เรียลไทม์: มีการลบรายการ', showSnackBar: false);
+            return;
+          }
+
           final ItemRecord? existingItem = _findItemById(rawId);
 
           if (existingItem == null) {
             // For newly created items, we may only receive id/ts in the event.
             // Refetch to retrieve the complete record (e.g., name).
             unawaited(_fetchItems());
-            _notifyUser('Real-time: new item detected', showSnackBar: false);
+            _notifyUser('เรียลไทม์: พบรายการใหม่', showSnackBar: false);
             return;
           }
 
@@ -418,7 +510,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
           // Notify with unique message including item name and partial ts
           final String notifyMsg =
-              'Real-time: ${updatedItem.name} - ts: ${parsedTs.substring(0, 8)}...';
+              'เรียลไทม์: ${updatedItem.name} - ts: ${parsedTs.substring(0, 8)}...';
           _notifyUser(notifyMsg, showSnackBar: false);
         }
       }
@@ -447,7 +539,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Realtime ts Change Demo'),
+        title: const Text('เดโมเปลี่ยนค่า ts แบบเรียลไทม์'),
         actions: <Widget>[
           IconButton(
             onPressed: _showNotificationsSheet,
@@ -470,7 +562,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
                   child: TextField(
                     controller: _nameController,
                     decoration: const InputDecoration(
-                      labelText: 'Item name',
+                      labelText: 'ชื่อรายการ',
                       border: OutlineInputBorder(),
                     ),
                   ),
@@ -478,7 +570,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
                 const SizedBox(width: 12),
                 FilledButton(
                   onPressed: _createItem,
-                  child: const Text('Create'),
+                  child: const Text('เพิ่ม'),
                 ),
               ],
             ),
@@ -498,13 +590,23 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
                     child: ListTile(
                       leading: const Icon(Icons.inventory_2_rounded),
                       title: Text(item.name),
-                      subtitle: Text('id: ${item.id}\nts: ${item.ts}'),
-                      trailing: OutlinedButton.icon(
-                        onPressed: _updatingItemIds.contains(item.id)
-                            ? null
-                            : () => _refreshTs(item.id),
-                        icon: const Icon(Icons.update),
-                        label: const Text('Update ts'),
+                      subtitle: Text('รหัส: ${item.id}\nts: ${item.ts}'),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          IconButton(
+                            onPressed: _updatingItemIds.contains(item.id)
+                                ? null
+                                : () => _refreshTs(item.id),
+                            icon: const Icon(Icons.update),
+                          ),
+                          IconButton(
+                            onPressed: _deletingItemIds.contains(item.id)
+                                ? null
+                                : () => _confirmDeleteItem(item),
+                            icon: const Icon(Icons.delete_outline),
+                          ),
+                        ],
                       ),
                     ),
                   );

@@ -21,11 +21,13 @@ interface ItemChangeDocument extends Document {
   _id: Types.ObjectId;
   ts?: Types.ObjectId | string | { $oid: string };
   lastUpdatedByChannel?: string;
+  deletedAt?: Date | null;
 }
 
 interface PendingChangePayload {
   ts: ExtendedObjectId;
   channelId?: string;
+  deleted: boolean;
 }
 
 interface ItemChangeEvent {
@@ -122,6 +124,7 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     this.enqueueChange(normalizedId, {
       ts: { $oid: normalizedTs },
       channelId,
+      deleted: this.isDeletedDocument(change.fullDocument),
     });
   }
 
@@ -160,6 +163,7 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
         ts: changePayload.ts,
         source: this.sourceId,
         channelId: changePayload.channelId,
+        deleted: changePayload.deleted,
       });
     }
 
@@ -207,6 +211,10 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     }
 
     return trimmed;
+  }
+
+  private isDeletedDocument(document?: ItemChangeDocument): boolean {
+    return Boolean(document?.deletedAt);
   }
 
   private normalizeObjectId(value: unknown): string | undefined {

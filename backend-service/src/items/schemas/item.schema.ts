@@ -13,6 +13,9 @@ export class Item {
 
   @Prop({ required: false, trim: true, maxlength: 120 })
   lastUpdatedByChannel?: string;
+
+  @Prop({ type: Date, required: false })
+  deletedAt?: Date;
 }
 
 export const ItemSchema = SchemaFactory.createForClass(Item);
