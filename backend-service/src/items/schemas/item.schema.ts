@@ -10,6 +10,9 @@ export class Item {
 
   @Prop({ required: true, default: () => new Types.ObjectId() })
   ts!: Types.ObjectId;
+
+  @Prop({ required: false, trim: true, maxlength: 120 })
+  lastUpdatedByChannel?: string;
 }
 
 export const ItemSchema = SchemaFactory.createForClass(Item);

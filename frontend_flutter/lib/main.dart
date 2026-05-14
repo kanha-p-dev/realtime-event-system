@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -94,6 +95,20 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
   int _notificationCount = 0;
   String _lastNotification = 'No notifications yet';
   io.Socket? _socket;
+  late final String _channelId = _createChannelId();
+
+  String _createChannelId() {
+    const String alphabet =
+        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final Random random = Random.secure();
+    final StringBuffer buffer = StringBuffer('device_');
+
+    for (int i = 0; i < 20; i++) {
+      buffer.write(alphabet[random.nextInt(alphabet.length)]);
+    }
+
+    return buffer.toString();
+  }
 
   String _friendlyErrorMessage(
     Object error, {
@@ -201,7 +216,10 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       final http.Response response = await http
           .post(
             uri,
-            headers: <String, String>{'Content-Type': 'application/json'},
+            headers: <String, String>{
+              'Content-Type': 'application/json',
+              'x-channel-id': _channelId,
+            },
             body: jsonEncode(<String, String>{'name': trimmedName}),
           )
           .timeout(apiTimeout);
@@ -239,7 +257,9 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
     try {
       final Uri uri = Uri.parse('$apiBaseUrl/items/$id/ts');
-      final http.Response response = await http.patch(uri).timeout(apiTimeout);
+      final http.Response response = await http
+          .patch(uri, headers: <String, String>{'x-channel-id': _channelId})
+          .timeout(apiTimeout);
 
       if (response.statusCode != 200) {
         throw Exception('อัปเดต ts ไม่สำเร็จ (สถานะ: ${response.statusCode})');
@@ -264,7 +284,9 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       if (mounted) {
         setState(() {
           _updatingItemIds.remove(id);
-          _pendingLocalUpdates.remove(id); // cleanup if ts_changed never arrives
+          _pendingLocalUpdates.remove(
+            id,
+          ); // cleanup if ts_changed never arrives
         });
       }
     }
@@ -356,6 +378,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
     final io.Socket socket = io.io(socketBaseUrl, <String, dynamic>{
       'transports': <String>['websocket'],
       'autoConnect': false,
+      'query': <String, dynamic>{'channelId': _channelId},
     });
 
     socket.onConnect((_) {

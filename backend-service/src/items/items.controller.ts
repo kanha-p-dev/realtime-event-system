@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
 import { CreateItemDto } from './dto/create-item.dto';
 import { ItemsService } from './items.service';
 import { Item } from './schemas/item.schema';
@@ -8,8 +16,11 @@ export class ItemsController {
   constructor(private readonly itemsService: ItemsService) {}
 
   @Post()
-  async create(@Body() createItemDto: CreateItemDto): Promise<Item> {
-    return this.itemsService.create(createItemDto);
+  async create(
+    @Body() createItemDto: CreateItemDto,
+    @Headers('x-channel-id') channelId?: string,
+  ): Promise<Item> {
+    return this.itemsService.create(createItemDto, channelId);
   }
 
   @Get()
@@ -18,7 +29,10 @@ export class ItemsController {
   }
 
   @Patch(':id/ts')
-  async refreshTs(@Param('id') id: string): Promise<Item> {
-    return this.itemsService.refreshTs(id);
+  async refreshTs(
+    @Param('id') id: string,
+    @Headers('x-channel-id') channelId?: string,
+  ): Promise<Item> {
+    return this.itemsService.refreshTs(id, channelId);
   }
 }

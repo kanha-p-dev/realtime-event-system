@@ -20,6 +20,12 @@ const FLUSH_DEBOUNCE_MS = 50;
 interface ItemChangeDocument extends Document {
   _id: Types.ObjectId;
   ts?: Types.ObjectId | string | { $oid: string };
+  lastUpdatedByChannel?: string;
+}
+
+interface PendingChangePayload {
+  ts: ExtendedObjectId;
+  channelId?: string;
 }
 
 interface ItemChangeEvent {
@@ -48,7 +54,7 @@ interface ChangeStreamEmitter extends EventEmitter {
 export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ChangeStreamService.name);
   private changeStream?: ChangeStreamEmitter;
-  private readonly pendingChanges = new Map<string, ExtendedObjectId>();
+  private readonly pendingChanges = new Map<string, PendingChangePayload>();
   private flushTimer?: NodeJS.Timeout;
   private lockRenewTimer?: NodeJS.Timeout;
   private hasBroadcastLeadership = false;
@@ -106,17 +112,21 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     const normalizedId = this.normalizeObjectId(change.documentKey._id);
     const normalizedTs =
       this.extractTsFromDocument(change.fullDocument) ?? normalizedId;
+    const channelId = this.extractChannelIdFromDocument(change.fullDocument);
 
     if (!normalizedId || !normalizedTs) {
       this.logger.warn('Skipping change event with invalid ObjectId payload');
       return;
     }
 
-    this.enqueueChange(normalizedId, { $oid: normalizedTs });
+    this.enqueueChange(normalizedId, {
+      ts: { $oid: normalizedTs },
+      channelId,
+    });
   }
 
-  private enqueueChange(id: string, ts: ExtendedObjectId): void {
-    this.pendingChanges.set(id, ts);
+  private enqueueChange(id: string, payload: PendingChangePayload): void {
+    this.pendingChanges.set(id, payload);
 
     if (this.flushTimer) {
       return;
@@ -144,11 +154,12 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    for (const [id, ts] of this.pendingChanges.entries()) {
+    for (const [id, changePayload] of this.pendingChanges.entries()) {
       this.realtimeGateway.broadcastTsChanged({
         id,
-        ts,
+        ts: changePayload.ts,
         source: this.sourceId,
+        channelId: changePayload.channelId,
       });
     }
 
@@ -177,6 +188,25 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     }
 
     return this.normalizeObjectId(document.ts);
+  }
+
+  private extractChannelIdFromDocument(
+    document?: ItemChangeDocument,
+  ): string | undefined {
+    if (!document?.lastUpdatedByChannel) {
+      return undefined;
+    }
+
+    return this.normalizeChannelId(document.lastUpdatedByChannel);
+  }
+
+  private normalizeChannelId(value: string): string | undefined {
+    const trimmed = value.trim();
+    if (!/^[a-zA-Z0-9_-]{6,120}$/.test(trimmed)) {
+      return undefined;
+    }
+
+    return trimmed;
   }
 
   private normalizeObjectId(value: unknown): string | undefined {
