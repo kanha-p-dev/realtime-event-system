@@ -88,6 +88,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
   final TextEditingController _nameController = TextEditingController();
   List<ItemRecord> _items = <ItemRecord>[];
   final Set<String> _updatingItemIds = <String>{};
+  final Set<String> _pendingLocalUpdates = <String>{};
   bool _isLoading = false;
   String? _error;
   int _notificationCount = 0;
@@ -234,6 +235,8 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       _updatingItemIds.add(id);
     });
 
+    _pendingLocalUpdates.add(id);
+
     try {
       final Uri uri = Uri.parse('$apiBaseUrl/items/$id/ts');
       final http.Response response = await http.patch(uri).timeout(apiTimeout);
@@ -261,6 +264,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       if (mounted) {
         setState(() {
           _updatingItemIds.remove(id);
+          _pendingLocalUpdates.remove(id); // cleanup if ts_changed never arrives
         });
       }
     }
@@ -383,6 +387,11 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
             ts: parsedTs,
           );
           _applyItemUpdate(updatedItem);
+
+          // Skip notification if this device was the one that triggered the update.
+          if (_pendingLocalUpdates.remove(rawId)) {
+            return;
+          }
 
           // Notify with unique message including item name and partial ts
           final String notifyMsg =
