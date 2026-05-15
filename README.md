@@ -1,125 +1,116 @@
-# Realtime Event System (Microservice, Atlas Only)
+# Realtime Event System
 
-End-to-end demo for this architecture:
+เดโมระบบแจ้งเตือนแบบเรียลไทม์ที่แยกตามช่องทาง (Channel)
 
-- Backend Service (NestJS API): write/update MongoDB Atlas
-- WebSocket Gateway Service (NestJS + Socket.IO): listens to MongoDB Change Stream and emits `ts_changed`
-- Frontend (Flutter): listens to `ts_changed` and refetches list
+ระบบประกอบด้วย 3 บริการหลัก:
+- Backend Service (NestJS REST API): จัดการ CRUD และตรวจสอบ channel
+- WebSocket Gateway Service (NestJS + Socket.IO): รับ MongoDB Change Stream แล้วส่ง event แบบ realtime
+- Flutter Frontend: หน้าจอผู้ใช้แบบ realtime และแยกการแจ้งเตือนตาม channel
 
-## Project structure
+## ความสามารถหลัก
 
-- `backend-service`: REST API service
-- `websocket-gateway-service`: WebSocket gateway service
-- `frontend_flutter`: Flutter app
+- แยกข้อมูล/แจ้งเตือนตาม channel ด้วยเบอร์โทรไทยรูปแบบ 0XXXXXXXXX
+- รองรับการระบุอุปกรณ์ด้วย x-client-id
+- ลบแบบ Soft delete (เก็บ deletedAt)
+- ส่ง websocket แบบ room ตาม channelId
+- ข้อความแจ้งเตือนแยกได้ว่าเป็นเครื่องตัวเองหรืออีกเครื่อง
+- UI แสดงสถานะ Backend และ Socket แยกกัน
 
-## Prerequisites
+## โครงสร้างโปรเจกต์
 
-- MongoDB Atlas (replica set cluster)
-- Node.js 20+
-- Flutter 3+
+- backend-service
+- websocket-gateway-service
+- frontend_flutter
+- docker-compose.yml
 
-## MongoDB Atlas setup
+## สิ่งที่ต้องมี
 
-1. Create database name: `realtime_event_system`
-2. Collection name: `items`
-3. Add your current IP in Atlas Network Access
-4. Create DB user with read/write permission for this database
+- Docker + Docker Compose (แนะนำ)
+- หรือ Node.js 20+ และ Flutter 3+
+- MongoDB Atlas แบบ replica set (จำเป็นสำหรับ Change Stream)
 
-The app uses this document shape in `items`:
+## เริ่มต้นด้วย Docker
 
-```json
-{
-  "_id": "ObjectId",
-  "name": "sensor-A",
-  "ts": "6820e4f3b7c2a1d3e5f60789",
-  "createdAt": "2026-05-11T09:30:00.000Z",
-  "updatedAt": "2026-05-11T09:30:00.000Z"
-}
-```
-
-Notes:
-- `_id`, `createdAt`, `updatedAt` are generated automatically.
-- Collection will be auto-created on first insert.
-
-## 1) Configure Backend API Service
+1. ตั้งค่า environment ที่ต้องใช้ (เช่น MONGODB_URI)
+2. รันบริการทั้งหมด
 
 ```bash
-cd backend-service
-cp .env.example .env
+docker compose up -d --build
 ```
 
-Set `MONGODB_URI` in `.env`:
-
-```env
-PORT=3000
-MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.rtyjoz0.mongodb.net/realtime_event_system?retryWrites=true&w=majority&appName=Cluster0
-```
-
-Start service:
+3. ตรวจสอบสถานะ
 
 ```bash
-npm run start:dev
+docker compose ps
 ```
 
-Service URL: `http://localhost:3000`
+พอร์ตเริ่มต้น:
+- Backend: http://localhost:3000
+- Gateway: http://localhost:3001
 
-## 2) Configure WebSocket Gateway Service
+## รัน Flutter
 
-Open another terminal:
-
-```bash
-cd websocket-gateway-service
-cp .env.example .env
-```
-
-Set `MONGODB_URI` in `.env` to the same Atlas URI as backend.
-
-Start service:
-
-```bash
-npm run start:dev
-```
-
-Gateway URL: `http://localhost:3001`
-
-## 3) Start Flutter App
-
-Open another terminal:
+### iOS Simulator
 
 ```bash
 cd frontend_flutter
 flutter run --dart-define=API_BASE_URL=http://localhost:3000 --dart-define=SOCKET_BASE_URL=http://localhost:3001
 ```
 
-If running Android emulator, use `10.0.2.2` instead of `localhost`:
+### Android Emulator
 
 ```bash
+cd frontend_flutter
 flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3000 --dart-define=SOCKET_BASE_URL=http://10.0.2.2:3001
 ```
 
-## API endpoints
+## สรุป REST API
 
-- `POST /items`
-  - body: `{ "name": "sensor-A" }`
-- `GET /items`
-- `PATCH /items/:id/ts`
+ทุก endpoint ต้องส่ง x-channel-id (รูปแบบเบอร์ไทย)
 
-## Realtime event payload
+- POST /items
+  - headers: x-channel-id, x-client-id (ไม่บังคับ)
+  - body: { "name": "ชื่อรายการ" }
+- GET /items
+  - headers: x-channel-id
+- PATCH /items/:id/ts
+  - headers: x-channel-id, x-client-id (ไม่บังคับ)
+- DELETE /items/:id
+  - headers: x-channel-id, x-client-id (ไม่บังคับ)
 
-Socket event: `ts_changed`
+## WebSocket Event
+
+Gateway จะส่ง event ชื่อ ts_changed ไปยัง room ตาม channelId
+
+ตัวอย่าง payload:
 
 ```json
 {
-  "id": "6820e4f3b7...",
-  "ts": { "$oid": "6820e4f9a3b1c2d4e5f60790" },
-  "source": "12345-550e8400-e29b-41d4-a716-446655440000"
+  "id": "6a06...",
+  "ts": { "$oid": "6a06..." },
+  "source": "pid-uuid",
+  "channelId": "0812345678",
+  "clientId": "device_...",
+  "deleted": false
 }
 ```
 
-## How to test end-to-end
+## เช็กลิสต์ทดสอบ
 
-1. Create item in Flutter app.
-2. Click `Update ts` on any item.
-3. API updates MongoDB Atlas.
-4. Gateway receives MongoDB Change Stream event and emits `ts_changed`.
-5. Flutter receives event and automatically refreshes list.
+1. เปิด 2 เครื่อง
+2. ตั้ง channel คนละเบอร์ เช่น
+   - เครื่อง 1: 0812345678
+   - เครื่อง 2: 0812345679
+3. ทำ create/update/delete ที่เครื่อง 1 -> ต้องแจ้งเตือนเฉพาะ channel เครื่อง 1
+4. ทำ create/update/delete ที่เครื่อง 2 -> ต้องแจ้งเตือนเฉพาะ channel เครื่อง 2
+5. ตรวจสอบชิปสถานะ Backend และ Socket ในหน้า Flutter
+
+## เอกสารเพิ่มเติม
+
+- ARCHITECTURE_DIAGRAMS.md
+- backend-service/README.md
+- backend-service/ARCHITECTURE_DIAGRAMS.md
+- frontend_flutter/README.md
+- frontend_flutter/ARCHITECTURE_DIAGRAMS.md
+- websocket-gateway-service/README.md
+- websocket-gateway-service/ARCHITECTURE_DIAGRAMS.md
