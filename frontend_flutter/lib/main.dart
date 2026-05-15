@@ -18,6 +18,7 @@ const Duration apiTimeout = Duration(seconds: 8);
 const Duration duplicateNotificationCooldown = Duration(seconds: 5);
 
 void main() {
+  debugPrint('[DEBUG] Flutter app started');
   runApp(const RealtimeApp());
 }
 
@@ -87,29 +88,135 @@ class RealtimeHomePage extends StatefulWidget {
 
 class _RealtimeHomePageState extends State<RealtimeHomePage> {
   final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _phoneChannelController = TextEditingController(
+    text: '0812345678',
+  );
   List<ItemRecord> _items = <ItemRecord>[];
   final Set<String> _updatingItemIds = <String>{};
   final Set<String> _deletingItemIds = <String>{};
-  final Set<String> _pendingLocalUpdates = <String>{};
-  final Set<String> _pendingLocalDeletes = <String>{};
   bool _isLoading = false;
   String? _error;
   int _notificationCount = 0;
   String _lastNotification = 'ยังไม่มีการแจ้งเตือน';
+  String? _lastNotificationMessage;
+  DateTime? _lastNotificationAt;
   io.Socket? _socket;
-  late final String _channelId = _createChannelId();
+  String? _socketChannelId;
+  String? _channelId;
+  final String _clientId = _buildClientId();
+  int _latestFetchRequestId = 0;
 
-  String _createChannelId() {
-    const String alphabet =
-        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    final Random random = Random.secure();
-    final StringBuffer buffer = StringBuffer('device_');
+  void _logRealtime(String message) {
+    debugPrint('[realtime] $message');
+  }
 
-    for (int i = 0; i < 20; i++) {
-      buffer.write(alphabet[random.nextInt(alphabet.length)]);
+  static String _buildClientId() {
+    final int now = DateTime.now().microsecondsSinceEpoch;
+    final int rand = Random().nextInt(0x7fffffff);
+    return 'device_${now.toRadixString(16)}_${rand.toRadixString(16)}';
+  }
+
+  String? _normalizeThaiPhoneChannel(String input) {
+    final String compact = input.replaceAll(RegExp(r'[\s-]'), '');
+
+    if (RegExp(r'^0\d{9}$').hasMatch(compact)) {
+      return compact;
     }
 
-    return buffer.toString();
+    if (RegExp(r'^(\+66|66)\d{9}$').hasMatch(compact)) {
+      final String localDigits = compact.startsWith('+66')
+          ? compact.substring(3)
+          : compact.substring(2);
+      return '0$localDigits';
+    }
+
+    return null;
+  }
+
+  String? _requireChannelId() {
+    final String? channelId = _channelId;
+    if (channelId != null) {
+      return channelId;
+    }
+
+    _setInlineError('กรุณาตั้งค่าเบอร์โทรช่องทางก่อนใช้งาน');
+    return null;
+  }
+
+  Future<String?> _ensureActiveChannelForAction() async {
+    final String? normalized = _normalizeThaiPhoneChannel(
+      _phoneChannelController.text,
+    );
+
+    if (normalized == null) {
+      _setInlineError('รูปแบบเบอร์โทรไม่ถูกต้อง (เช่น 0812345678)');
+      return null;
+    }
+
+    final bool isSocketConnected = _socket?.connected ?? false;
+    final bool socketMatchesChannel = _socketChannelId == normalized;
+    if (_channelId != normalized ||
+        !isSocketConnected ||
+        !socketMatchesChannel) {
+      _logRealtime(
+        'ensure_channel_sync fromInput=$normalized current=$_channelId socketConnected=$isSocketConnected socketChannel=$_socketChannelId',
+      );
+      await _applyPhoneChannel();
+    }
+
+    return _requireChannelId();
+  }
+
+  Future<void> _applyPhoneChannel() async {
+    final String? normalized = _normalizeThaiPhoneChannel(
+      _phoneChannelController.text,
+    );
+
+    if (normalized == null) {
+      _setInlineError('รูปแบบเบอร์โทรไม่ถูกต้อง (เช่น 0812345678)');
+      return;
+    }
+
+    final bool channelChanged = _channelId != normalized;
+    _channelId = normalized;
+    _logRealtime('apply_channel channelId=$normalized changed=$channelChanged');
+
+    if (!channelChanged) {
+      _setInlineError('');
+
+      // If same channel is applied again, ensure socket is connected.
+      // This recovers realtime notifications after gateway/app restarts.
+      final bool isSocketConnected = _socket?.connected ?? false;
+      final bool socketMatchesChannel = _socketChannelId == normalized;
+      if (!isSocketConnected || !socketMatchesChannel) {
+        _logRealtime(
+          'socket_reconnect_on_same_channel connected=$isSocketConnected socketChannel=$_socketChannelId expected=$normalized',
+        );
+        _socket?.dispose();
+        _socket = null;
+        _socketChannelId = null;
+        _connectSocket();
+      }
+      return;
+    }
+
+    _socket?.dispose();
+    _socket = null;
+    _socketChannelId = null;
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _items = <ItemRecord>[];
+      _notificationCount = 0;
+      _lastNotification = 'ยังไม่มีการแจ้งเตือน';
+      _error = null;
+    });
+
+    await _fetchItems();
+    _connectSocket();
   }
 
   String _friendlyErrorMessage(
@@ -147,18 +254,27 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
   @override
   void initState() {
     super.initState();
-    _fetchItems();
-    _connectSocket();
+    unawaited(_applyPhoneChannel());
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _phoneChannelController.dispose();
     _socket?.dispose();
+    _socket = null;
+    _socketChannelId = null;
     super.dispose();
   }
 
   Future<void> _fetchItems() async {
+    final String? channelId = _requireChannelId();
+    if (channelId == null) {
+      return;
+    }
+
+    final int requestId = ++_latestFetchRequestId;
+
     setState(() {
       _isLoading = true;
       _error = null;
@@ -167,7 +283,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
     try {
       final Uri uri = Uri.parse('$apiBaseUrl/items');
       final http.Response response = await http
-          .get(uri, headers: <String, String>{'x-channel-id': _channelId})
+          .get(uri, headers: <String, String>{'x-channel-id': channelId})
           .timeout(apiTimeout);
 
       if (response.statusCode != 200) {
@@ -182,6 +298,10 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
           .toList();
 
       if (!mounted) {
+        return;
+      }
+
+      if (_channelId != channelId || requestId != _latestFetchRequestId) {
         return;
       }
 
@@ -201,6 +321,10 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       });
     } finally {
       if (mounted) {
+        if (_channelId != channelId || requestId != _latestFetchRequestId) {
+          return;
+        }
+
         setState(() {
           _isLoading = false;
         });
@@ -216,13 +340,19 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
     try {
       _setInlineError('');
+      final String? channelId = await _ensureActiveChannelForAction();
+      if (channelId == null) {
+        return;
+      }
+
       final Uri uri = Uri.parse('$apiBaseUrl/items');
       final http.Response response = await http
           .post(
             uri,
             headers: <String, String>{
               'Content-Type': 'application/json',
-              'x-channel-id': _channelId,
+              'x-channel-id': channelId,
+              'x-client-id': _clientId,
             },
             body: jsonEncode(<String, String>{'name': trimmedName}),
           )
@@ -231,6 +361,20 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       if (response.statusCode != 201 && response.statusCode != 200) {
         throw Exception('สร้างรายการไม่สำเร็จ (สถานะ: ${response.statusCode})');
       }
+
+      // Parse response and add item to list immediately
+      final Map<String, dynamic> decoded =
+          jsonDecode(response.body) as Map<String, dynamic>;
+      final ItemRecord newItem = ItemRecord.fromJson(decoded);
+
+      if (!mounted) {
+        return;
+      }
+
+      // Add new item to list immediately and mark it locally so we don't duplicate notify
+      setState(() {
+        _items.insert(0, newItem);
+      });
 
       _nameController.clear();
     } catch (error) {
@@ -247,18 +391,27 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       return;
     }
 
+    final String? channelId = await _ensureActiveChannelForAction();
+    if (channelId == null) {
+      return;
+    }
+
     final ItemRecord? currentItem = _findItemById(id);
 
     setState(() {
       _updatingItemIds.add(id);
     });
 
-    _pendingLocalUpdates.add(id);
-
     try {
       final Uri uri = Uri.parse('$apiBaseUrl/items/$id/ts');
       final http.Response response = await http
-          .patch(uri, headers: <String, String>{'x-channel-id': _channelId})
+          .patch(
+            uri,
+            headers: <String, String>{
+              'x-channel-id': channelId,
+              'x-client-id': _clientId,
+            },
+          )
           .timeout(apiTimeout);
 
       if (response.statusCode != 200) {
@@ -284,9 +437,6 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       if (mounted) {
         setState(() {
           _updatingItemIds.remove(id);
-          _pendingLocalUpdates.remove(
-            id,
-          ); // cleanup if ts_changed never arrives
         });
       }
     }
@@ -297,16 +447,25 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       return;
     }
 
+    final String? channelId = await _ensureActiveChannelForAction();
+    if (channelId == null) {
+      return;
+    }
+
     setState(() {
       _deletingItemIds.add(id);
     });
 
-    _pendingLocalDeletes.add(id);
-
     try {
       final Uri uri = Uri.parse('$apiBaseUrl/items/$id');
       final http.Response response = await http
-          .delete(uri, headers: <String, String>{'x-channel-id': _channelId})
+          .delete(
+            uri,
+            headers: <String, String>{
+              'x-channel-id': channelId,
+              'x-client-id': _clientId,
+            },
+          )
           .timeout(apiTimeout);
 
       if (response.statusCode != 200) {
@@ -321,7 +480,6 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
         _items = _items.where((ItemRecord item) => item.id != id).toList();
       });
     } catch (error) {
-      _pendingLocalDeletes.remove(id);
       final String message = _friendlyErrorMessage(
         error,
         fallbackMessage: 'ไม่สามารถลบรายการได้',
@@ -388,15 +546,30 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
   void _notifyUser(String message, {bool showSnackBar = true}) {
     if (!mounted) {
+      debugPrint('[DEBUG] [NOTI] Widget not mounted, skipping notification');
       return;
     }
 
+    final DateTime now = DateTime.now();
+    final bool isDuplicate =
+        _lastNotificationMessage == message &&
+        _lastNotificationAt != null &&
+        now.difference(_lastNotificationAt!) < duplicateNotificationCooldown;
+
+    debugPrint(
+      '[DEBUG] [NOTI] Updating badge count. isDuplicate=$isDuplicate, message=$message',
+    );
+    // Always increment count, but suppress snackbar for duplicates
     setState(() {
       _notificationCount += 1;
       _lastNotification = message;
+      _lastNotificationMessage = message;
+      _lastNotificationAt = now;
+      debugPrint('[DEBUG] [NOTI] Badge count updated to: $_notificationCount');
     });
 
-    if (showSnackBar) {
+    // Only show snackbar if not a duplicate to avoid UI spam
+    if (!isDuplicate && showSnackBar) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
@@ -445,22 +618,71 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
   }
 
   void _connectSocket() {
+    final String? channelId = _requireChannelId();
+    if (channelId == null) {
+      return;
+    }
+
+    _socket?.dispose();
+    _socket = null;
+    _socketChannelId = null;
+
+    debugPrint(
+      '[DEBUG] [SOCKET] Connecting to channel: $channelId, clientId: $_clientId',
+    );
+    _logRealtime('socket_connecting channelId=$channelId clientId=$_clientId');
+
     final io.Socket socket = io.io(socketBaseUrl, <String, dynamic>{
       'transports': <String>['websocket'],
       'autoConnect': false,
-      'query': <String, dynamic>{'channelId': _channelId},
+      'forceNew': true,
+      'multiplex': false,
+      'query': <String, dynamic>{'channelId': channelId, 'clientId': _clientId},
     });
 
     socket.onConnect((_) {
+      _socketChannelId = channelId;
+      debugPrint(
+        '[DEBUG] [SOCKET] Connected! Channel: $channelId, socketId: ${socket.id}',
+      );
+      _logRealtime(
+        'socket_connected channelId=$channelId clientId=$_clientId socketId=${socket.id}',
+      );
       _setInlineError('');
       _notifyUser('เชื่อมต่อระบบเรียลไทม์สำเร็จ');
     });
 
+    debugPrint('[DEBUG] [SOCKET] Registering ts_changed listener');
     socket.on('ts_changed', (dynamic payload) {
+      debugPrint('[DEBUG] [SOCKET] EVENT RECEIVED: $payload');
       if (payload is Map<String, dynamic>) {
+        final String? activeChannelId = _channelId;
+        if (activeChannelId == null) {
+          _logRealtime('event_ignored missing_active_channel payload=$payload');
+          return;
+        }
+
+        final dynamic rawChannelId = payload['channelId'];
+        if (rawChannelId is String && rawChannelId != activeChannelId) {
+          _logRealtime(
+            'event_ignored channel_mismatch payloadChannel=$rawChannelId activeChannel=$activeChannelId',
+          );
+          return;
+        }
+
         final dynamic rawId = payload['id'] ?? payload['_id'];
         final dynamic rawTs = payload['ts'];
+        final dynamic rawClientId = payload['clientId'];
+        final bool isFromThisDevice =
+            rawClientId is String && rawClientId == _clientId;
         final bool isDeleted = payload['deleted'] == true;
+
+        debugPrint(
+          '[DEBUG] [EVENT] itemId=$rawId, channel=$rawChannelId, fromClient=$rawClientId, self=$isFromThisDevice, deleted=$isDeleted',
+        );
+        _logRealtime(
+          'event_received itemId=$rawId channelId=$rawChannelId fromClientId=$rawClientId self=$isFromThisDevice deleted=$isDeleted',
+        );
 
         if (rawId is String) {
           if (isDeleted) {
@@ -474,11 +696,11 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
                   .toList();
             });
 
-            if (_pendingLocalDeletes.remove(rawId)) {
-              return;
-            }
-
-            _notifyUser('เรียลไทม์: มีการลบรายการ', showSnackBar: false);
+            final String deleteMsg = isFromThisDevice
+                ? 'เรียลไทม์: คุณลบรายการจากเครื่องนี้'
+                : 'เรียลไทม์: มีการลบรายการจากอีกเครื่อง';
+            debugPrint('[DEBUG] [NOTI] Triggering notification: $deleteMsg');
+            _notifyUser(deleteMsg, showSnackBar: false);
             return;
           }
 
@@ -488,7 +710,11 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
             // For newly created items, we may only receive id/ts in the event.
             // Refetch to retrieve the complete record (e.g., name).
             unawaited(_fetchItems());
-            _notifyUser('เรียลไทม์: พบรายการใหม่', showSnackBar: false);
+            final String createMsg = isFromThisDevice
+                ? 'เรียลไทม์: คุณเพิ่มรายการจากเครื่องนี้'
+                : 'เรียลไทม์: มีการเพิ่มรายการจากอีกเครื่อง';
+            debugPrint('[DEBUG] [NOTI] Triggering notification: $createMsg');
+            _notifyUser(createMsg, showSnackBar: false);
             return;
           }
 
@@ -501,30 +727,35 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
           );
           _applyItemUpdate(updatedItem);
 
-          // Skip notification if this device was the one that triggered the update.
-          if (_pendingLocalUpdates.remove(rawId)) {
-            return;
-          }
-
           // Notify with unique message including item name and partial ts
+          final String originLabel = isFromThisDevice
+              ? 'เครื่องนี้'
+              : 'อีกเครื่อง';
           final String notifyMsg =
-              'เรียลไทม์: ${updatedItem.name} - ts: ${parsedTs.substring(0, 8)}...';
+              'เรียลไทม์: $originLabel อัปเดต ${updatedItem.name} - ts: ${parsedTs.substring(0, 8)}...';
+          debugPrint('[DEBUG] [NOTI] Triggering notification: $notifyMsg');
           _notifyUser(notifyMsg, showSnackBar: false);
         }
       }
     });
 
     socket.onConnectError((dynamic error) {
+      _logRealtime('socket_connect_error channelId=$channelId error=$error');
       final String message = 'ไม่สามารถเชื่อมต่อ socket gateway ได้: $error';
       _setInlineError(message);
     });
 
     socket.onError((dynamic error) {
+      _logRealtime('socket_error channelId=$channelId error=$error');
       final String message = 'เกิดข้อผิดพลาดระหว่างทำงานของ socket: $error';
       _setInlineError(message);
     });
 
     socket.onDisconnect((dynamic _) {
+      _socketChannelId = null;
+      _logRealtime(
+        'socket_disconnected channelId=$channelId clientId=$_clientId',
+      );
       const String message = 'การเชื่อมต่อ socket ถูกตัด';
       _setInlineError(message);
     });
@@ -535,6 +766,9 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final bool isSocketConnected = _socket?.connected ?? false;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('เดโมเปลี่ยนค่า ts แบบเรียลไทม์'),
@@ -550,68 +784,181 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
           IconButton(onPressed: _fetchItems, icon: const Icon(Icons.refresh)),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: TextField(
-                    controller: _nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'ชื่อรายการ',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                FilledButton(
-                  onPressed: _createItem,
-                  child: const Text('เพิ่ม'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (_isLoading) const LinearProgressIndicator(),
-            if (_error != null && _error!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(_error!, style: const TextStyle(color: Colors.red)),
-              ),
-            Expanded(
-              child: ListView.builder(
-                itemCount: _items.length,
-                itemBuilder: (BuildContext context, int index) {
-                  final ItemRecord item = _items[index];
-                  return Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.inventory_2_rounded),
-                      title: Text(item.name),
-                      subtitle: Text('รหัส: ${item.id}\nts: ${item.ts}'),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: <Widget>[
+              Card(
+                elevation: 0,
+                color: theme.colorScheme.surfaceContainerHighest,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        'ตั้งค่าช่องทาง',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
                         children: <Widget>[
-                          IconButton(
-                            onPressed: _updatingItemIds.contains(item.id)
-                                ? null
-                                : () => _refreshTs(item.id),
-                            icon: const Icon(Icons.update),
+                          Expanded(
+                            child: TextField(
+                              controller: _phoneChannelController,
+                              keyboardType: TextInputType.phone,
+                              decoration: const InputDecoration(
+                                labelText: 'เบอร์โทรช่องทาง (ไทย)',
+                                hintText: 'เช่น 0812345678',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                            ),
                           ),
-                          IconButton(
-                            onPressed: _deletingItemIds.contains(item.id)
-                                ? null
-                                : () => _confirmDeleteItem(item),
-                            icon: const Icon(Icons.delete_outline),
+                          const SizedBox(width: 10),
+                          FilledButton.icon(
+                            onPressed: _applyPhoneChannel,
+                            icon: const Icon(Icons.check_circle_outline),
+                            label: const Text('ตั้งค่า'),
                           ),
                         ],
                       ),
-                    ),
-                  );
-                },
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: <Widget>[
+                          Chip(
+                            avatar: Icon(
+                              isSocketConnected ? Icons.wifi : Icons.wifi_off,
+                              size: 18,
+                            ),
+                            label: Text(
+                              isSocketConnected
+                                  ? 'เชื่อมต่อแล้ว'
+                                  : 'ยังไม่เชื่อมต่อ',
+                            ),
+                          ),
+                          Chip(
+                            avatar: const Icon(Icons.sim_card, size: 18),
+                            label: Text('ช่องทาง: ${_channelId ?? '-'}'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              Card(
+                elevation: 0,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: TextField(
+                          controller: _nameController,
+                          decoration: const InputDecoration(
+                            labelText: 'ชื่อรายการ',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      FilledButton.icon(
+                        onPressed: _createItem,
+                        icon: const Icon(Icons.add),
+                        label: const Text('เพิ่ม'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (_isLoading) const LinearProgressIndicator(),
+              if (_error != null && _error!.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: 8, bottom: 10),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.errorContainer,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    _error!,
+                    style: TextStyle(color: theme.colorScheme.onErrorContainer),
+                  ),
+                ),
+              Expanded(
+                child: _items.isEmpty
+                    ? Center(
+                        child: Text(
+                          'ยังไม่มีรายการในช่องทางนี้',
+                          style: theme.textTheme.bodyLarge,
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: _items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (BuildContext context, int index) {
+                          final ItemRecord item = _items[index];
+                          return Card(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              child: ListTile(
+                                leading: const Icon(Icons.inventory_2_rounded),
+                                title: Text(
+                                  item.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    const SizedBox(height: 4),
+                                    Text('รหัส: ${item.id}'),
+                                    Text('ts: ${item.ts}'),
+                                  ],
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    IconButton(
+                                      tooltip: 'อัปเดต ts',
+                                      onPressed:
+                                          _updatingItemIds.contains(item.id)
+                                          ? null
+                                          : () => _refreshTs(item.id),
+                                      icon: const Icon(Icons.update),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'ลบรายการ',
+                                      onPressed:
+                                          _deletingItemIds.contains(item.id)
+                                          ? null
+                                          : () => _confirmDeleteItem(item),
+                                      icon: const Icon(Icons.delete_outline),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
         ),
       ),
     );

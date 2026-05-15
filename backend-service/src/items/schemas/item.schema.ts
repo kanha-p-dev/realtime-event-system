@@ -17,6 +17,9 @@ export class Item {
   @Prop({ required: false, trim: true, maxlength: 120 })
   lastUpdatedByChannel?: string;
 
+  @Prop({ required: false, trim: true, maxlength: 120 })
+  lastUpdatedByClient?: string;
+
   @Prop({ type: Date, required: false })
   deletedAt?: Date;
 }

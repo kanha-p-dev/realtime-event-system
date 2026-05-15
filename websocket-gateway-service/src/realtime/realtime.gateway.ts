@@ -12,6 +12,7 @@ interface TsChangedPayload {
   ts: { $oid: string };
   source: string;
   channelId?: string;
+  clientId?: string;
   deleted?: boolean;
 }
 
@@ -27,14 +28,17 @@ export class RealtimeGateway
   server!: Server;
 
   private readonly logger = new Logger(RealtimeGateway.name);
-  private static readonly channelIdRegex = /^[a-zA-Z0-9_-]{6,120}$/;
+  private static readonly channelIdRegex = /^0\d{9}$/;
 
   handleConnection(client: Socket): void {
     const channelId = this.extractChannelId(client);
+    const clientId = this.extractClientId(client);
 
     if (channelId) {
       void client.join(channelId);
-      this.logger.log(`Client connected: ${client.id} channel=${channelId}`);
+      this.logger.log(
+        `Client connected: ${client.id} channel=${channelId} clientId=${clientId ?? 'unknown'}`,
+      );
       return;
     }
 
@@ -47,6 +51,9 @@ export class RealtimeGateway
 
   broadcastTsChanged(payload: TsChangedPayload): void {
     if (payload.channelId) {
+      this.logger.debug(
+        `Emitting ts_changed to room ${payload.channelId} itemId=${payload.id}`,
+      );
       this.server.to(payload.channelId).emit('ts_changed', payload);
       return;
     }
@@ -79,5 +86,23 @@ export class RealtimeGateway
     }
 
     return trimmed;
+  }
+
+  private extractClientId(client: Socket): string | undefined {
+    const rawValue = client.handshake.query?.clientId;
+    if (typeof rawValue === 'string') {
+      const trimmed = rawValue.trim();
+      return trimmed || undefined;
+    }
+
+    if (Array.isArray(rawValue)) {
+      const first = rawValue[0];
+      if (typeof first === 'string') {
+        const trimmed = first.trim();
+        return trimmed || undefined;
+      }
+    }
+
+    return undefined;
   }
 }

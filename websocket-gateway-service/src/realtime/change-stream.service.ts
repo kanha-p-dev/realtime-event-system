@@ -21,12 +21,14 @@ interface ItemChangeDocument extends Document {
   _id: Types.ObjectId;
   ts?: Types.ObjectId | string | { $oid: string };
   lastUpdatedByChannel?: string;
+  lastUpdatedByClient?: string;
   deletedAt?: Date | null;
 }
 
 interface PendingChangePayload {
   ts: ExtendedObjectId;
   channelId?: string;
+  clientId?: string;
   deleted: boolean;
 }
 
@@ -115,15 +117,21 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     const normalizedTs =
       this.extractTsFromDocument(change.fullDocument) ?? normalizedId;
     const channelId = this.extractChannelIdFromDocument(change.fullDocument);
+    const clientId = this.extractClientIdFromDocument(change.fullDocument);
 
     if (!normalizedId || !normalizedTs) {
       this.logger.warn('Skipping change event with invalid ObjectId payload');
       return;
     }
 
+    this.logger.debug(
+      `handleChange operationType=${change.operationType} itemId=${normalizedId} channelId=${channelId ?? 'undefined'} clientId=${clientId ?? 'undefined'} lastUpdatedByChannel=${change.fullDocument?.lastUpdatedByChannel}`,
+    );
+
     this.enqueueChange(normalizedId, {
       ts: { $oid: normalizedTs },
       channelId,
+      clientId,
       deleted: this.isDeletedDocument(change.fullDocument),
     });
   }
@@ -158,11 +166,15 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     }
 
     for (const [id, changePayload] of this.pendingChanges.entries()) {
+      this.logger.debug(
+        `Broadcasting ts_changed itemId=${id} channelId=${changePayload.channelId ?? 'undefined'} clientId=${changePayload.clientId ?? 'undefined'}`,
+      );
       this.realtimeGateway.broadcastTsChanged({
         id,
         ts: changePayload.ts,
         source: this.sourceId,
         channelId: changePayload.channelId,
+        clientId: changePayload.clientId,
         deleted: changePayload.deleted,
       });
     }
@@ -204,9 +216,25 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     return this.normalizeChannelId(document.lastUpdatedByChannel);
   }
 
+  private extractClientIdFromDocument(
+    document?: ItemChangeDocument,
+  ): string | undefined {
+    const rawClientId = document?.lastUpdatedByClient;
+    if (!rawClientId) {
+      return undefined;
+    }
+
+    const trimmed = rawClientId.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    return trimmed;
+  }
+
   private normalizeChannelId(value: string): string | undefined {
     const trimmed = value.trim();
-    if (!/^[a-zA-Z0-9_-]{6,120}$/.test(trimmed)) {
+    if (!/^0\d{9}$/.test(trimmed)) {
       return undefined;
     }
 

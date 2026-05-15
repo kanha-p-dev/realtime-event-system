@@ -12,7 +12,8 @@ import { Item, ItemDocument } from './schemas/item.schema';
 @Injectable()
 export class ItemsService {
   private readonly logger = new Logger(ItemsService.name);
-  private static readonly channelIdRegex = /^[a-zA-Z0-9_-]{6,120}$/;
+  private static readonly channelIdRegex = /^0\d{9}$/;
+  private static readonly clientIdRegex = /^[a-zA-Z0-9:_-]{6,120}$/;
 
   constructor(
     @InjectModel(Item.name) private readonly itemModel: Model<ItemDocument>,
@@ -21,14 +22,17 @@ export class ItemsService {
   async create(
     createItemDto: CreateItemDto,
     channelId?: string,
+    clientId?: string,
   ): Promise<Item> {
     const normalizedChannelId = this.requireChannelId(channelId);
+    const normalizedClientId = this.normalizeClientId(clientId);
 
     const item = new this.itemModel({
       name: createItemDto.name,
       ts: new Types.ObjectId(),
       ownerChannelId: normalizedChannelId,
       lastUpdatedByChannel: normalizedChannelId,
+      lastUpdatedByClient: normalizedClientId,
     });
     const savedItem = await item.save();
     this.logger.log(
@@ -54,13 +58,14 @@ export class ItemsService {
     return items;
   }
 
-  async refreshTs(id: string, channelId?: string): Promise<Item> {
+  async refreshTs(id: string, channelId?: string, clientId?: string): Promise<Item> {
     if (!Types.ObjectId.isValid(id)) {
       this.logger.warn(`refresh_item_ts invalid_id id=${id}`);
       throw new NotFoundException('Item not found');
     }
 
     const normalizedChannelId = this.requireChannelId(channelId);
+    const normalizedClientId = this.normalizeClientId(clientId);
 
     const updatedItem = await this.itemModel
       .findOneAndUpdate(
@@ -73,6 +78,7 @@ export class ItemsService {
           $set: {
             ts: new Types.ObjectId(),
             lastUpdatedByChannel: normalizedChannelId,
+            lastUpdatedByClient: normalizedClientId,
           },
         },
         { returnDocument: 'after', runValidators: true },
@@ -91,13 +97,14 @@ export class ItemsService {
     return updatedItem;
   }
 
-  async remove(id: string, channelId?: string): Promise<Item> {
+  async remove(id: string, channelId?: string, clientId?: string): Promise<Item> {
     if (!Types.ObjectId.isValid(id)) {
       this.logger.warn(`delete_item invalid_id id=${id}`);
       throw new NotFoundException('Item not found');
     }
 
     const normalizedChannelId = this.requireChannelId(channelId);
+    const normalizedClientId = this.normalizeClientId(clientId);
 
     const deletedItem = await this.itemModel
       .findOneAndUpdate(
@@ -111,6 +118,7 @@ export class ItemsService {
             deletedAt: new Date(),
             ts: new Types.ObjectId(),
             lastUpdatedByChannel: normalizedChannelId,
+            lastUpdatedByClient: normalizedClientId,
           },
         },
         { returnDocument: 'after', runValidators: true },
@@ -137,7 +145,26 @@ export class ItemsService {
 
     const trimmed = channelId.trim();
     if (!ItemsService.channelIdRegex.test(trimmed)) {
-      throw new BadRequestException('Invalid x-channel-id header');
+      throw new BadRequestException(
+        'Invalid x-channel-id header (Thai phone format: 0XXXXXXXXX)',
+      );
+    }
+
+    return trimmed;
+  }
+
+  private normalizeClientId(clientId?: string): string | undefined {
+    if (!clientId) {
+      return undefined;
+    }
+
+    const trimmed = clientId.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    if (!ItemsService.clientIdRegex.test(trimmed)) {
+      throw new BadRequestException('Invalid x-client-id header');
     }
 
     return trimmed;

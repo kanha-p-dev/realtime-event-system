@@ -20,8 +20,9 @@ export class ItemsController {
   async create(
     @Body() createItemDto: CreateItemDto,
     @Headers('x-channel-id') channelId?: string,
+    @Headers('x-client-id') clientId?: string,
   ): Promise<Item> {
-    return this.itemsService.create(createItemDto, channelId);
+    return this.itemsService.create(createItemDto, channelId, clientId);
   }
 
   @Get()
@@ -33,15 +34,17 @@ export class ItemsController {
   async refreshTs(
     @Param('id') id: string,
     @Headers('x-channel-id') channelId?: string,
+    @Headers('x-client-id') clientId?: string,
   ): Promise<Item> {
-    return this.itemsService.refreshTs(id, channelId);
+    return this.itemsService.refreshTs(id, channelId, clientId);
   }
 
   @Delete(':id')
   async remove(
     @Param('id') id: string,
     @Headers('x-channel-id') channelId?: string,
+    @Headers('x-client-id') clientId?: string,
   ): Promise<Item> {
-    return this.itemsService.remove(id, channelId);
+    return this.itemsService.remove(id, channelId, clientId);
   }
 }

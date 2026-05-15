@@ -16,7 +16,7 @@ services:
       MONGODB_DB_NAME: ${MONGODB_DB_NAME:-realtime_event_system}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/items"]
+      test: ["CMD-SHELL", "node -e \"const http=require('http');const req=http.request({hostname:'localhost',port:3000,path:'/items',method:'GET',headers:{'x-channel-id':'0812345678'}},res=>{process.exit(res.statusCode===200?0:1)});req.on('error',()=>process.exit(1));req.end();\""]
       interval: 30s
       timeout: 10s
       retries: 3
