@@ -102,12 +102,23 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
   DateTime? _lastNotificationAt;
   io.Socket? _socket;
   String? _socketChannelId;
+  bool? _isBackendConnected;
   String? _channelId;
   final String _clientId = _buildClientId();
   int _latestFetchRequestId = 0;
 
   void _logRealtime(String message) {
     debugPrint('[realtime] $message');
+  }
+
+  void _setBackendConnection(bool connected) {
+    if (!mounted || _isBackendConnected == connected) {
+      return;
+    }
+
+    setState(() {
+      _isBackendConnected = connected;
+    });
   }
 
   static String _buildClientId() {
@@ -274,6 +285,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
     }
 
     final int requestId = ++_latestFetchRequestId;
+    bool backendResponded = false;
 
     setState(() {
       _isLoading = true;
@@ -285,6 +297,8 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       final http.Response response = await http
           .get(uri, headers: <String, String>{'x-channel-id': channelId})
           .timeout(apiTimeout);
+      backendResponded = true;
+      _setBackendConnection(true);
 
       if (response.statusCode != 200) {
         throw Exception('โหลดรายการไม่สำเร็จ');
@@ -309,6 +323,10 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
         _items = loadedItems;
       });
     } catch (error) {
+      if (!backendResponded) {
+        _setBackendConnection(false);
+      }
+
       if (!mounted) {
         return;
       }
@@ -338,6 +356,8 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       return;
     }
 
+    bool backendResponded = false;
+
     try {
       _setInlineError('');
       final String? channelId = await _ensureActiveChannelForAction();
@@ -357,6 +377,8 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
             body: jsonEncode(<String, String>{'name': trimmedName}),
           )
           .timeout(apiTimeout);
+      backendResponded = true;
+      _setBackendConnection(true);
 
       if (response.statusCode != 201 && response.statusCode != 200) {
         throw Exception('สร้างรายการไม่สำเร็จ (สถานะ: ${response.statusCode})');
@@ -378,6 +400,10 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
       _nameController.clear();
     } catch (error) {
+      if (!backendResponded) {
+        _setBackendConnection(false);
+      }
+
       final String message = _friendlyErrorMessage(
         error,
         fallbackMessage: 'ไม่สามารถสร้างรายการได้',
@@ -402,6 +428,8 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       _updatingItemIds.add(id);
     });
 
+    bool backendResponded = false;
+
     try {
       final Uri uri = Uri.parse('$apiBaseUrl/items/$id/ts');
       final http.Response response = await http
@@ -413,6 +441,8 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
             },
           )
           .timeout(apiTimeout);
+      backendResponded = true;
+      _setBackendConnection(true);
 
       if (response.statusCode != 200) {
         throw Exception('อัปเดต ts ไม่สำเร็จ (สถานะ: ${response.statusCode})');
@@ -428,6 +458,10 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
         await _fetchItems();
       }
     } catch (error) {
+      if (!backendResponded) {
+        _setBackendConnection(false);
+      }
+
       final String message = _friendlyErrorMessage(
         error,
         fallbackMessage: 'ไม่สามารถอัปเดต ts ได้',
@@ -456,6 +490,8 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       _deletingItemIds.add(id);
     });
 
+    bool backendResponded = false;
+
     try {
       final Uri uri = Uri.parse('$apiBaseUrl/items/$id');
       final http.Response response = await http
@@ -467,6 +503,8 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
             },
           )
           .timeout(apiTimeout);
+      backendResponded = true;
+      _setBackendConnection(true);
 
       if (response.statusCode != 200) {
         throw Exception('ลบรายการไม่สำเร็จ (สถานะ: ${response.statusCode})');
@@ -480,6 +518,10 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
         _items = _items.where((ItemRecord item) => item.id != id).toList();
       });
     } catch (error) {
+      if (!backendResponded) {
+        _setBackendConnection(false);
+      }
+
       final String message = _friendlyErrorMessage(
         error,
         fallbackMessage: 'ไม่สามารถลบรายการได้',
@@ -768,6 +810,24 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final bool isSocketConnected = _socket?.connected ?? false;
+    final String backendStatusText = _isBackendConnected == null
+        ? 'ยังไม่ตรวจสอบ BE'
+        : (_isBackendConnected! ? 'BE พร้อมใช้งาน' : 'BE ไม่พร้อมใช้งาน');
+    final IconData backendStatusIcon = _isBackendConnected == null
+        ? Icons.cloud_queue
+        : (_isBackendConnected! ? Icons.cloud_done : Icons.cloud_off);
+    final Color backendChipBg = _isBackendConnected == null
+        ? const Color(0xFF4B5563)
+        : (_isBackendConnected!
+              ? const Color(0xFF16A34A)
+              : const Color(0xFFDC2626));
+    final Color backendChipFg = Colors.white;
+    final Color socketChipBg = isSocketConnected
+        ? const Color(0xFF0284C7)
+        : const Color(0xFFB91C1C);
+    final Color socketChipFg = Colors.white;
+    final Color channelChipBg = const Color(0xFF1D4ED8);
+    final Color channelChipFg = Colors.white;
 
     return Scaffold(
       appBar: AppBar(
@@ -832,19 +892,42 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
                         runSpacing: 8,
                         children: <Widget>[
                           Chip(
+                            backgroundColor: backendChipBg,
                             avatar: Icon(
-                              isSocketConnected ? Icons.wifi : Icons.wifi_off,
+                              backendStatusIcon,
                               size: 18,
+                              color: backendChipFg,
                             ),
                             label: Text(
-                              isSocketConnected
-                                  ? 'เชื่อมต่อแล้ว'
-                                  : 'ยังไม่เชื่อมต่อ',
+                              backendStatusText,
+                              style: TextStyle(color: backendChipFg),
                             ),
                           ),
                           Chip(
-                            avatar: const Icon(Icons.sim_card, size: 18),
-                            label: Text('ช่องทาง: ${_channelId ?? '-'}'),
+                            backgroundColor: socketChipBg,
+                            avatar: Icon(
+                              isSocketConnected ? Icons.wifi : Icons.wifi_off,
+                              size: 18,
+                              color: socketChipFg,
+                            ),
+                            label: Text(
+                              isSocketConnected
+                                  ? 'Socket เชื่อมต่อ'
+                                  : 'Socket ไม่เชื่อมต่อ',
+                              style: TextStyle(color: socketChipFg),
+                            ),
+                          ),
+                          Chip(
+                            backgroundColor: channelChipBg,
+                            avatar: Icon(
+                              Icons.sim_card,
+                              size: 18,
+                              color: channelChipFg,
+                            ),
+                            label: Text(
+                              'ช่องทาง: ${_channelId ?? '-'}',
+                              style: TextStyle(color: channelChipFg),
+                            ),
                           ),
                         ],
                       ),
@@ -909,25 +992,39 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
                         itemBuilder: (BuildContext context, int index) {
                           final ItemRecord item = _items[index];
                           return Card(
+                            elevation: 1,
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
+                                horizontal: 8,
+                                vertical: 8,
                               ),
                               child: ListTile(
-                                leading: const Icon(Icons.inventory_2_rounded),
+                                leading: Icon(
+                                  Icons.inventory_2_rounded,
+                                  color: theme.colorScheme.primary,
+                                ),
                                 title: Text(
                                   item.name,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                                 subtitle: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   mainAxisSize: MainAxisSize.min,
                                   children: <Widget>[
-                                    const SizedBox(height: 4),
-                                    Text('รหัส: ${item.id}'),
-                                    Text('ts: ${item.ts}'),
+                                    const SizedBox(height: 6),
+                                    SelectableText(
+                                      'รหัส: ${item.id}',
+                                      style: theme.textTheme.bodySmall,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    SelectableText(
+                                      'ts: ${item.ts}',
+                                      style: theme.textTheme.bodySmall,
+                                    ),
                                   ],
                                 ),
                                 trailing: Row(
@@ -939,7 +1036,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
                                           _updatingItemIds.contains(item.id)
                                           ? null
                                           : () => _refreshTs(item.id),
-                                      icon: const Icon(Icons.update),
+                                      icon: const Icon(Icons.schedule_rounded),
                                     ),
                                     IconButton(
                                       tooltip: 'ลบรายการ',
@@ -947,7 +1044,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
                                           _deletingItemIds.contains(item.id)
                                           ? null
                                           : () => _confirmDeleteItem(item),
-                                      icon: const Icon(Icons.delete_outline),
+                                      icon: const Icon(Icons.delete_rounded),
                                     ),
                                   ],
                                 ),
