@@ -23,7 +23,9 @@ void main() {
 }
 
 class RealtimeApp extends StatelessWidget {
-  const RealtimeApp({super.key});
+  const RealtimeApp({super.key, this.enableAutoConnect = true});
+
+  final bool enableAutoConnect;
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +34,7 @@ class RealtimeApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
       ),
-      home: const RealtimeHomePage(),
+      home: RealtimeHomePage(enableAutoConnect: enableAutoConnect),
     );
   }
 }
@@ -80,7 +82,9 @@ class ItemRecord {
 }
 
 class RealtimeHomePage extends StatefulWidget {
-  const RealtimeHomePage({super.key});
+  const RealtimeHomePage({super.key, this.enableAutoConnect = true});
+
+  final bool enableAutoConnect;
 
   @override
   State<RealtimeHomePage> createState() => _RealtimeHomePageState();
@@ -267,7 +271,9 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
   @override
   void initState() {
     super.initState();
-    unawaited(_applyPhoneChannel());
+    if (widget.enableAutoConnect) {
+      unawaited(_applyPhoneChannel());
+    }
   }
 
   @override

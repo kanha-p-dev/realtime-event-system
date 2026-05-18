@@ -11,10 +11,12 @@ import 'package:frontend_flutter/main.dart';
 
 void main() {
   testWidgets('Realtime app loads', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const RealtimeApp());
+    // Build app and wait one frame for initial UI.
+    await tester.pumpWidget(const RealtimeApp(enableAutoConnect: false));
+    await tester.pump();
 
-    // Verify that the app title is present.
-    expect(find.text('Realtime Event Demo'), findsOneWidget);
+    // Verify key static labels in the current Thai UI.
+    expect(find.text('เดโมเปลี่ยนค่า ts แบบเรียลไทม์'), findsOneWidget);
+    expect(find.text('ตั้งค่าช่องทาง'), findsOneWidget);
   });
 }
