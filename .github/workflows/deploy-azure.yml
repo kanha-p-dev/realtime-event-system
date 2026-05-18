@@ -1,22 +1,21 @@
 name: Deploy to Azure Container Apps
 
 on:
-  push:
-    branches:
-      - main
+  workflow_call:
 
 env:
   AZURE_CONTAINER_REGISTRY: ${{ secrets.AZURE_CONTAINER_REGISTRY }}   # e.g. myacr.azurecr.io
   RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
   BACKEND_APP_NAME: backend-service
   WEBSOCKET_APP_NAME: websocket-gateway-service
+  RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # Job 1: Build & push backend-service
   # ─────────────────────────────────────────────────────────────────────────
   build-backend:
-    name: Build backend-service
+    name: Build backend-service (prod)
     runs-on: ubuntu-latest
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
@@ -33,7 +32,7 @@ jobs:
 
       - name: Set image tag
         id: meta
-        run: echo "tags=${{ env.AZURE_CONTAINER_REGISTRY }}/backend-service:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: echo "tags=${{ env.AZURE_CONTAINER_REGISTRY }}/backend-service:${{ env.RELEASE_TAG }}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push backend-service image
         run: |
@@ -44,7 +43,7 @@ jobs:
   # Job 2: Build & push websocket-gateway-service
   # ─────────────────────────────────────────────────────────────────────────
   build-websocket:
-    name: Build websocket-gateway-service
+    name: Build websocket-gateway-service (prod)
     runs-on: ubuntu-latest
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
@@ -61,7 +60,7 @@ jobs:
 
       - name: Set image tag
         id: meta
-        run: echo "tags=${{ env.AZURE_CONTAINER_REGISTRY }}/websocket-gateway-service:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: echo "tags=${{ env.AZURE_CONTAINER_REGISTRY }}/websocket-gateway-service:${{ env.RELEASE_TAG }}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push websocket-gateway-service image
         run: |
@@ -72,9 +71,10 @@ jobs:
   # Job 3: Deploy backend-service to Azure Container Apps
   # ─────────────────────────────────────────────────────────────────────────
   deploy-backend:
-    name: Deploy backend-service
+    name: Deploy backend-service (prod)
     runs-on: ubuntu-latest
     needs: build-backend
+    environment: production
     steps:
       - name: Azure login
         uses: azure/login@v2
@@ -97,9 +97,10 @@ jobs:
   # Job 4: Deploy websocket-gateway-service to Azure Container Apps
   # ─────────────────────────────────────────────────────────────────────────
   deploy-websocket:
-    name: Deploy websocket-gateway-service
+    name: Deploy websocket-gateway-service (prod)
     runs-on: ubuntu-latest
     needs: build-websocket
+    environment: production
     steps:
       - name: Azure login
         uses: azure/login@v2

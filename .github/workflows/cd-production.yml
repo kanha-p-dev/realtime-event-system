@@ -1,0 +1,12 @@
+name: CD Production
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy Production
+    uses: ./.github/workflows/deploy-azure.yml
