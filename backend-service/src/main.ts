@@ -17,4 +17,4 @@ async function bootstrap() {
   await app.listen(port);
   Logger.log(`server_started port=${port}`, 'Bootstrap');
 }
-bootstrap();
+void bootstrap();

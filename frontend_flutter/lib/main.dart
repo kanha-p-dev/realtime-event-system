@@ -341,11 +341,9 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
         );
       });
     } finally {
-      if (mounted) {
-        if (_channelId != channelId || requestId != _latestFetchRequestId) {
-          return;
-        }
-
+      final bool isLatestRequest =
+          _channelId == channelId && requestId == _latestFetchRequestId;
+      if (mounted && isLatestRequest) {
         setState(() {
           _isLoading = false;
         });
