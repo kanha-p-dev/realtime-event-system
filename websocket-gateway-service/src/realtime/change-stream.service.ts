@@ -59,8 +59,10 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ChangeStreamService.name);
   private changeStream?: ChangeStreamEmitter;
   private readonly pendingChanges = new Map<string, PendingChangePayload>();
+  // เก็บ event ชั่วคราวเพื่อ batch ก่อน broadcast
   private flushTimer?: NodeJS.Timeout;
   private lockRenewTimer?: NodeJS.Timeout;
+  // มีเพียง instance ที่เป็น leader เท่านั้นที่อนุญาตให้ broadcast
   private hasBroadcastLeadership = false;
   private readonly sourceId = `${process.pid}-${randomUUID()}`;
 
@@ -75,6 +77,7 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     await this.tryAcquireBroadcastLeadership();
     this.startLockRenewLoop();
 
+    // watch การเปลี่ยนแปลง collection items แล้วแปลงเป็น event สำหรับ websocket
     this.changeStream = collection.watch([], {
       fullDocument: 'updateLookup',
     });
@@ -147,7 +150,7 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
       `Scheduling change stream flush with ${this.pendingChanges.size} pending item(s)`,
     );
 
-    // Coalesce rapid updates into one short flush window to reduce websocket pressure.
+    // รวม event ที่มาถี่ ๆ ภายในช่วงสั้น เพื่อลดจำนวน emit ที่ไม่จำเป็น
     this.flushTimer = setTimeout(() => {
       this.flushPendingChanges();
     }, FLUSH_DEBOUNCE_MS);
@@ -157,6 +160,7 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     const batchSize = this.pendingChanges.size;
 
     if (!this.hasBroadcastLeadership) {
+      // ถ้าไม่ได้สิทธิ์ leader จะไม่ broadcast ป้องกันซ้ำเมื่อมีหลาย replica
       this.logger.debug(
         `Skipping flush of ${batchSize} event(s) because source is not leader`,
       );
@@ -272,6 +276,7 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     const lockCollection = this.connection.collection<BroadcastLockDocument>(
       BROADCAST_LOCK_COLLECTION,
     );
+    // TTL index สำหรับล้าง lock ที่หมดอายุอัตโนมัติ
     await lockCollection.createIndex(
       { expiresAt: 1 },
       { expireAfterSeconds: 0 },
@@ -293,6 +298,7 @@ export class ChangeStreamService implements OnModuleInit, OnModuleDestroy {
     const wasLeader = this.hasBroadcastLeadership;
 
     try {
+      // ต่ออายุ lock เดิมของตัวเอง หรือแย่ง lock ได้เมื่อ lock เก่าหมดอายุ
       const updateResult = await lockCollection.updateOne(
         {
           _id: BROADCAST_LOCK_ID,

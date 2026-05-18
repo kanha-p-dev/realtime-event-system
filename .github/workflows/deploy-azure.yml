@@ -1,6 +1,7 @@
 name: Deploy to Azure Container Apps
 
 on:
+  # workflow นี้ไม่ถูก trigger ตรง ๆ แต่ให้ workflow อื่นเรียกใช้
   workflow_call:
 
 env:
@@ -8,6 +9,7 @@ env:
   RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
   BACKEND_APP_NAME: backend-service
   WEBSOCKET_APP_NAME: websocket-gateway-service
+  # ถ้ามาจาก tag จะใช้ชื่อ tag เป็น image tag, ไม่งั้นใช้ commit sha
   RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
 
 jobs:
@@ -32,6 +34,7 @@ jobs:
 
       - name: Set image tag
         id: meta
+        # สร้าง image tag สำหรับ backend ตาม RELEASE_TAG
         run: echo "tags=${{ env.AZURE_CONTAINER_REGISTRY }}/backend-service:${{ env.RELEASE_TAG }}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push backend-service image
@@ -60,6 +63,7 @@ jobs:
 
       - name: Set image tag
         id: meta
+        # สร้าง image tag สำหรับ gateway ตาม RELEASE_TAG
         run: echo "tags=${{ env.AZURE_CONTAINER_REGISTRY }}/websocket-gateway-service:${{ env.RELEASE_TAG }}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push websocket-gateway-service image
@@ -74,6 +78,7 @@ jobs:
     name: Deploy backend-service (prod)
     runs-on: ubuntu-latest
     needs: build-backend
+    # ผูกกับ environment production เพื่อใช้ approval gate ได้
     environment: production
     steps:
       - name: Azure login
@@ -100,6 +105,7 @@ jobs:
     name: Deploy websocket-gateway-service (prod)
     runs-on: ubuntu-latest
     needs: build-websocket
+    # ผูกกับ environment production เพื่อใช้ approval gate ได้
     environment: production
     steps:
       - name: Azure login

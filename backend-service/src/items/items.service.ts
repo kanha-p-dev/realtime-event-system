@@ -12,7 +12,9 @@ import { Item, ItemDocument } from './schemas/item.schema';
 @Injectable()
 export class ItemsService {
   private readonly logger = new Logger(ItemsService.name);
+  // channel ใช้เบอร์โทรไทยรูปแบบ 0XXXXXXXXX
   private static readonly channelIdRegex = /^0\d{9}$/;
+  // clientId รองรับตัวอักษรที่ปลอดภัยสำหรับ log/query string
   private static readonly clientIdRegex = /^[a-zA-Z0-9:_-]{6,120}$/;
 
   constructor(
@@ -44,6 +46,7 @@ export class ItemsService {
   async findAll(channelId?: string): Promise<Item[]> {
     const normalizedChannelId = this.requireChannelId(channelId);
 
+    // อ่านเฉพาะข้อมูลใน channel เดียวกัน และซ่อนรายการที่ถูกลบแล้ว
     const items = await this.itemModel
       .find({
         ownerChannelId: normalizedChannelId,
@@ -58,7 +61,11 @@ export class ItemsService {
     return items;
   }
 
-  async refreshTs(id: string, channelId?: string, clientId?: string): Promise<Item> {
+  async refreshTs(
+    id: string,
+    channelId?: string,
+    clientId?: string,
+  ): Promise<Item> {
     if (!Types.ObjectId.isValid(id)) {
       this.logger.warn(`refresh_item_ts invalid_id id=${id}`);
       throw new NotFoundException('Item not found');
@@ -67,6 +74,7 @@ export class ItemsService {
     const normalizedChannelId = this.requireChannelId(channelId);
     const normalizedClientId = this.normalizeClientId(clientId);
 
+    // อัปเดต ts ทุกครั้งเพื่อให้ฝั่ง realtime มองเห็นการเปลี่ยนแปลงแน่นอน
     const updatedItem = await this.itemModel
       .findOneAndUpdate(
         {
@@ -97,7 +105,11 @@ export class ItemsService {
     return updatedItem;
   }
 
-  async remove(id: string, channelId?: string, clientId?: string): Promise<Item> {
+  async remove(
+    id: string,
+    channelId?: string,
+    clientId?: string,
+  ): Promise<Item> {
     if (!Types.ObjectId.isValid(id)) {
       this.logger.warn(`delete_item invalid_id id=${id}`);
       throw new NotFoundException('Item not found');
@@ -106,6 +118,7 @@ export class ItemsService {
     const normalizedChannelId = this.requireChannelId(channelId);
     const normalizedClientId = this.normalizeClientId(clientId);
 
+    // ใช้ soft delete และขยับ ts เพื่อกระตุ้น event realtime ฝั่ง gateway
     const deletedItem = await this.itemModel
       .findOneAndUpdate(
         {
@@ -139,6 +152,7 @@ export class ItemsService {
   }
 
   private requireChannelId(channelId?: string): string {
+    // บังคับให้ทุกคำขอระบุ channel เสมอ ป้องกันข้อมูลข้ามห้อง
     if (!channelId) {
       throw new BadRequestException('Missing x-channel-id header');
     }
@@ -154,6 +168,7 @@ export class ItemsService {
   }
 
   private normalizeClientId(clientId?: string): string | undefined {
+    // clientId เป็น optional แต่ถ้าส่งมาต้องผ่านรูปแบบที่กำหนด
     if (!clientId) {
       return undefined;
     }

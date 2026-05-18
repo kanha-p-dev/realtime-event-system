@@ -8,6 +8,7 @@ export class Item {
   @Prop({ required: true, trim: true })
   name!: string;
 
+  // ts ใช้ ObjectId เพื่อได้ timestamp ในตัวและเหมาะกับการ trigger change stream
   @Prop({ required: true, default: () => new Types.ObjectId() })
   ts!: Types.ObjectId;
 
@@ -20,6 +21,7 @@ export class Item {
   @Prop({ required: false, trim: true, maxlength: 120 })
   lastUpdatedByClient?: string;
 
+  // deletedAt ใช้แทนการลบจริง เพื่อเก็บประวัติและรองรับ realtime delete event
   @Prop({ type: Date, required: false })
   deletedAt?: Date;
 }

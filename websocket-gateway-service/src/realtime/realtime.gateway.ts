@@ -31,10 +31,12 @@ export class RealtimeGateway
   private static readonly channelIdRegex = /^0\d{9}$/;
 
   handleConnection(client: Socket): void {
+    // อ่าน channel/client จาก query เพื่อแยกห้องตามผู้ใช้งาน
     const channelId = this.extractChannelId(client);
     const clientId = this.extractClientId(client);
 
     if (channelId) {
+      // join ห้องตาม channel เพื่อให้ broadcast แบบเจาะจงห้อง
       void client.join(channelId);
       this.logger.log(
         `Client connected: ${client.id} channel=${channelId} clientId=${clientId ?? 'unknown'}`,
@@ -51,6 +53,7 @@ export class RealtimeGateway
 
   broadcastTsChanged(payload: TsChangedPayload): void {
     if (payload.channelId) {
+      // ส่ง event เฉพาะสมาชิกในห้อง channel เดียวกัน
       this.logger.debug(
         `Emitting ts_changed to room ${payload.channelId} itemId=${payload.id}`,
       );
@@ -79,6 +82,7 @@ export class RealtimeGateway
 
     const trimmed = channelId.trim();
     if (!RealtimeGateway.channelIdRegex.test(trimmed)) {
+      // invalid channel จะไม่ join room และไม่กระทบห้องอื่น
       this.logger.warn(
         `Client ${client.id} sent invalid channelId, using global stream`,
       );

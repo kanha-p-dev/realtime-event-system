@@ -1,5 +1,6 @@
 name: CD Production
 
+# รัน production เมื่อ push tag รูปแบบ v*.*.* หรือกดรันมือ
 on:
   push:
     tags:
@@ -9,4 +10,5 @@ on:
 jobs:
   deploy:
     name: Deploy Production
+    # เรียก reusable workflow เพื่อคง logic deploy ไว้ที่ไฟล์เดียว
     uses: ./.github/workflows/deploy-azure.yml

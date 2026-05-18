@@ -1,5 +1,6 @@
 name: CD Staging (Azure Container Apps)
 
+# รันอัตโนมัติเมื่อ push เข้า main และกดรันมือได้
 on:
   push:
     branches:
@@ -7,16 +8,19 @@ on:
   workflow_dispatch:
 
 concurrency:
+  # จำกัดให้มี staging deploy ต่อครั้งเดียว
   group: cd-staging
   cancel-in-progress: true
 
 env:
+  # ดึงค่าปลายทางจาก GitHub Secrets
   AZURE_CONTAINER_REGISTRY: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
   RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP_STAGING }}
   BACKEND_APP_NAME: ${{ secrets.AZURE_BACKEND_APP_NAME_STAGING }}
   WEBSOCKET_APP_NAME: ${{ secrets.AZURE_WEBSOCKET_APP_NAME_STAGING }}
 
 jobs:
+  # ตรวจว่า service ใดควรถูก deploy ในรอบนี้
   detect-changes:
     name: Detect Deployable Changes
     runs-on: ubuntu-latest
@@ -31,6 +35,7 @@ jobs:
         id: filter
         uses: dorny/paths-filter@v3
         with:
+          # ถ้ามีการแก้ service หรือ compose จะถือว่าต้อง deploy
           filters: |
             backend:
               - 'backend-service/**'
@@ -43,6 +48,7 @@ jobs:
     name: Build and Push Backend (Staging)
     runs-on: ubuntu-latest
     needs: detect-changes
+    # ข้าม job นี้ถ้า backend ไม่ได้เปลี่ยน
     if: needs.detect-changes.outputs.backend == 'true'
     outputs:
       image-tag: ${{ steps.meta.outputs.tag }}
@@ -70,6 +76,7 @@ jobs:
     name: Build and Push Gateway (Staging)
     runs-on: ubuntu-latest
     needs: detect-changes
+    # ข้าม job นี้ถ้า gateway ไม่ได้เปลี่ยน
     if: needs.detect-changes.outputs.gateway == 'true'
     outputs:
       image-tag: ${{ steps.meta.outputs.tag }}
@@ -97,6 +104,7 @@ jobs:
     name: Deploy Backend (Staging)
     runs-on: ubuntu-latest
     needs: build-backend
+    # deploy ต่อเมื่อ build backend สำเร็จเท่านั้น
     if: needs.build-backend.result == 'success'
     environment: staging
     steps:
@@ -121,6 +129,7 @@ jobs:
     name: Deploy Gateway (Staging)
     runs-on: ubuntu-latest
     needs: build-gateway
+    # deploy ต่อเมื่อ build gateway สำเร็จเท่านั้น
     if: needs.build-gateway.result == 'success'
     environment: staging
     steps:

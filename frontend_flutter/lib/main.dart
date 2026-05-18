@@ -166,6 +166,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
     final bool isSocketConnected = _socket?.connected ?? false;
     final bool socketMatchesChannel = _socketChannelId == normalized;
+    // ก่อนยิง API ทุกครั้ง ต้องให้ channel ฝั่ง REST และห้อง socket ตรงกัน
     if (_channelId != normalized ||
         !isSocketConnected ||
         !socketMatchesChannel) {
@@ -188,6 +189,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       return;
     }
 
+    // เปลี่ยน channel = เปลี่ยนห้องข้อมูล จึง reset state และต่อ socket ใหม่
     final bool channelChanged = _channelId != normalized;
     _channelId = normalized;
     _logRealtime('apply_channel channelId=$normalized changed=$channelChanged');
@@ -284,6 +286,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       return;
     }
 
+    // requestId ป้องกันผลลัพธ์เก่ามาทับสถานะล่าสุด (race condition)
     final int requestId = ++_latestFetchRequestId;
     bool backendResponded = false;
 
@@ -601,7 +604,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
     debugPrint(
       '[DEBUG] [NOTI] Updating badge count. isDuplicate=$isDuplicate, message=$message',
     );
-    // Always increment count, but suppress snackbar for duplicates
+    // นับแจ้งเตือนทุกครั้ง แต่ลด spam โดยไม่โชว์ snackbar ซ้ำในช่วง cooldown
     setState(() {
       _notificationCount += 1;
       _lastNotification = message;
@@ -610,7 +613,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
       debugPrint('[DEBUG] [NOTI] Badge count updated to: $_notificationCount');
     });
 
-    // Only show snackbar if not a duplicate to avoid UI spam
+    // แสดง snackbar เฉพาะข้อความใหม่
     if (!isDuplicate && showSnackBar) {
       ScaffoldMessenger.of(
         context,
@@ -674,6 +677,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
     );
     _logRealtime('socket_connecting channelId=$channelId clientId=$_clientId');
 
+    // forceNew + multiplex=false เพื่อกันการ reuse connection คนละ channel
     final io.Socket socket = io.io(socketBaseUrl, <String, dynamic>{
       'transports': <String>['websocket'],
       'autoConnect': false,
@@ -706,6 +710,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
 
         final dynamic rawChannelId = payload['channelId'];
         if (rawChannelId is String && rawChannelId != activeChannelId) {
+          // กัน event ข้ามห้อง: รับเฉพาะ channel ที่ผู้ใช้กำลังดู
           _logRealtime(
             'event_ignored channel_mismatch payloadChannel=$rawChannelId activeChannel=$activeChannelId',
           );
@@ -751,6 +756,7 @@ class _RealtimeHomePageState extends State<RealtimeHomePage> {
           if (existingItem == null) {
             // For newly created items, we may only receive id/ts in the event.
             // Refetch to retrieve the complete record (e.g., name).
+            // รีเฟรชจาก API เพื่อดึงข้อมูลเต็มของรายการที่เพิ่งถูกสร้าง
             unawaited(_fetchItems());
             final String createMsg = isFromThisDevice
                 ? 'เรียลไทม์: คุณเพิ่มรายการจากเครื่องนี้'

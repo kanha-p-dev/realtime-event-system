@@ -19,6 +19,7 @@ export class ItemsController {
   @Post()
   async create(
     @Body() createItemDto: CreateItemDto,
+    // รับ channel/client จาก header แล้วส่งต่อให้ service จัดการ validation
     @Headers('x-channel-id') channelId?: string,
     @Headers('x-client-id') clientId?: string,
   ): Promise<Item> {
@@ -33,6 +34,7 @@ export class ItemsController {
   @Patch(':id/ts')
   async refreshTs(
     @Param('id') id: string,
+    // ใช้ channel เดิมในการจำกัดขอบเขตข้อมูล และ client สำหรับระบุที่มาของการแก้ไข
     @Headers('x-channel-id') channelId?: string,
     @Headers('x-client-id') clientId?: string,
   ): Promise<Item> {
@@ -42,6 +44,7 @@ export class ItemsController {
   @Delete(':id')
   async remove(
     @Param('id') id: string,
+    // ลบแบบ soft delete โดยระบุผู้แก้ไขล่าสุดผ่าน clientId
     @Headers('x-channel-id') channelId?: string,
     @Headers('x-client-id') clientId?: string,
   ): Promise<Item> {
