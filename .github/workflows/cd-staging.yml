@@ -3,7 +3,8 @@ name: CD Staging (Azure Container Apps)
 on:
   push:
     branches:
-      - develop
+      - main
+  workflow_dispatch:
 
 concurrency:
   group: cd-staging
